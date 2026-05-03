@@ -1,81 +1,65 @@
 # Slurm-Dash
 
-A lightweight, hybrid local/remote Slurm job tracking system with a Terminal User Interface (TUI). Slurm-Dash allows you to monitor Slurm jobs submitted on remote HPC clusters right from your local machine, avoiding the need to constantly SSH and run `squeue` or `sacct`.
+A lightweight, hybrid local/remote Slurm job tracking system with a Terminal User Interface (TUI). Monitor jobs submitted on remote HPC clusters from your local machine — no constant SSH, no `squeue` polling by hand.
 
-## Overview & Architecture
+## How It Works
 
-Slurm-Dash uses a hybrid architecture to ensure fast, responsive tracking without constant SSH overhead:
+Slurm-Dash uses a three-layer architecture:
 
-1. **Remote Interception**: When you add a server, Slurm-Dash injects a lightweight `sbatch` interceptor into the remote `~/.bashrc` and `~/.zshrc`.
-2. **Snapshot & Capture**: Every time you submit a job via `sbatch`, the interceptor instantly snapshots your working directory (using fast reflink/hardlink copies) into `~/.slurm_tracker/staging`. It then asynchronously runs `~/.slurm_tracker/capture.py` to record the job ID, arguments, environment, and snapshot into a remote SQLite database (`~/.slurm_tracker/.slurm_tracker.db`).
-3. **Local Syncing**: Your local machine periodically syncs data from the remote SQLite database into a local database (`local_state.db`), managed by `platformdirs`.
-4. **Live Polling**: When running the UI, the system dynamically polls `squeue` and `sacct` over SSH to overlay live status (pending, running, completed, CPU/memory/GPU usage) onto the tracked jobs.
+1. **Remote wrapper**: `slurm-dash add` deploys a standalone `sbatch` wrapper script to `~/.slurm_tracker/bin/sbatch` on the remote and prepends that directory to `PATH` in `~/.bashrc` and `~/.zshrc`. Because it is a real script on `PATH` (not a shell function), it intercepts `sbatch` calls from interactive shells, bash scripts, Python subprocesses, and workflow managers like Nextflow and Snakemake alike.
 
-### Dependencies
-Slurm-Dash is extremely lightweight. It depends only on:
-- **`platformdirs`**: For robust, cross-platform configuration and data directory paths.
-- **`textual`**: To power the modern, responsive Terminal UI.
+2. **Snapshot & capture**: Every `sbatch` call triggers an instant snapshot of the working directory (reflink or hardlink — no byte copies) into a staging area, then asynchronously runs `~/.slurm_tracker/capture.py` to record the job ID, submit arguments, git state, environment, and snapshot into a remote SQLite database at `~/.slurm_tracker/.slurm_tracker.db`.
 
-## Installation & Setup
+3. **Local sync & live polling**: Your local machine syncs the remote SQLite database into a local one on demand. When the TUI is open, it polls `squeue` and `sacct` over SSH to overlay live status (pending, running, completed, CPU/memory/GPU) onto the tracked jobs.
 
-1. **Install the package locally**:
-   ```bash
-   pip install .
-   ```
-   *(We recommend installing inside an isolated virtual environment)*
+## Installation
 
-2. **Add a Remote Server**:
-   To start tracking jobs on a remote cluster, deploy the Slurm-Dash payload to it using the `add` command. This uses SSH and SCP to set up the tracker directories, the remote database, and the interceptor script.
-   ```bash
-   slurm-dash add user@hpc.cluster.edu --alias mycluster
-   ```
-   *Note: `--alias` is optional. If omitted, the alias will default to the hostname.*
+```bash
+curl -LsSf https://raw.githubusercontent.com/haaaaron/slurm-dash/main/install.sh | bash
+```
+
+This installs [uv](https://github.com/astral-sh/uv) if it is not already present, then uses it to install slurm-dash into an isolated tool environment. `uv` can bootstrap Python itself, so there are no external dependencies.
+
+After install, make sure `~/.local/bin` is on your `PATH`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc or ~/.zshrc
+```
+
+## Setup
+
+Add a remote cluster (runs over SSH/SCP — key-based auth recommended):
+
+```bash
+slurm-dash add user@hpc.cluster.edu --alias mycluster
+```
+
+`--alias` is optional; it defaults to the hostname. This command:
+- Creates `~/.slurm_tracker/{bin,snapshots,staging}` on the remote
+- Deploys the `sbatch` wrapper and `capture.py`
+- Initialises the remote SQLite database
+- Appends `export PATH="$HOME/.slurm_tracker/bin:$PATH"` to `~/.bashrc` and `~/.zshrc`
+
+Source your rc file (or open a new shell) on the remote for the wrapper to take effect:
+
+```bash
+source ~/.bashrc
+```
 
 ## Usage
 
-### Launching the Dashboard
-
-To view your jobs, simply run the view command. This launches the Textual-based Terminal UI:
-
 ```bash
-slurm-dash view
-# or simply
-slurm-dash
-```
-
-Inside the UI, you can see tracked jobs, their statuses, request info, and delete them from your view.
-
-### Viewing Raw Data
-
-If you need to inspect the underlying SQLite data for debugging, use the `dump` command:
-
-```bash
-slurm-dash dump
-# To filter by a specific server alias
+slurm-dash          # launch the TUI (syncs all servers on startup)
+slurm-dash view     # same as above
+slurm-dash dump     # print raw DB rows to stdout
 slurm-dash dump --alias mycluster
-```
-
-### Managing Remote Storage
-
-The tracked snapshots on the remote server can take up space over time. You can purge jobs older than a certain number of days (default is 30):
-
-```bash
-slurm-dash purge user@hpc.cluster.edu --older-than 14
+slurm-dash purge user@hpc.cluster.edu --older-than 14   # remove snapshots older than N days
 ```
 
 ## Uninstallation
-
-If you wish to completely remove Slurm-Dash from a remote server, use the `remove` command. This will:
-- Strip the `sbatch` interceptor from `~/.bashrc` and `~/.zshrc`.
-- Delete the remote `~/.slurm_tracker` directory (containing the DB, snapshots, and staging files).
-- Remove the server from your local `config.toml`.
 
 ```bash
 slurm-dash remove user@hpc.cluster.edu
 ```
 
-To also drop all locally cached job and output rows associated with that server, include the `--purge-local` flag:
-
-```bash
-slurm-dash remove user@hpc.cluster.edu --purge-local
-```
+Strips the PATH block from `~/.bashrc`/`~/.zshrc`, deletes `~/.slurm_tracker` on the remote, and removes the server from the local config. Add `--purge-local` to also drop all locally cached jobs and outputs for that server.
