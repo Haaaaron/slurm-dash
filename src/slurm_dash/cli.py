@@ -422,6 +422,10 @@ def main():
     dump_parser.add_argument("--remote", action="store_true",
                              help="Dump the remote DB on each server instead of local")
 
+    web_parser = subparsers.add_parser("web", help="Launch the web dashboard")
+    web_parser.add_argument("--port", type=int, default=7860)
+    web_parser.add_argument("--host", default="127.0.0.1")
+
     subparsers.add_parser("help", help="Show this help message and exit")
 
     args = parser.parse_args()
@@ -443,6 +447,9 @@ def main():
         run_tui()
     elif args.command == "dump":
         dump_db(args.alias, args.all, args.limit, args.remote)
+    elif args.command == "web":
+        from .web.app import run_web_server
+        run_web_server(args.host, args.port)
     elif args.command == "help":
         parser.print_help()
     else:

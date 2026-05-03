@@ -1,0 +1,106 @@
+<div
+  class="fixed inset-0 z-50 flex items-center justify-center p-4"
+  @keydown.escape.window="$el.remove()"
+  x-data="{}">
+
+  <!-- Backdrop -->
+  <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" @click="$el.closest('[x-data]').remove()"></div>
+
+  <!-- Panel -->
+  <div class="relative w-full max-w-4xl max-h-[84vh] flex flex-col rounded-2xl border border-gray-700 bg-gray-950 shadow-2xl overflow-hidden">
+
+    <!-- Header -->
+    <div class="flex items-center gap-3 px-5 py-4 border-b border-gray-800">
+      <span class="text-xs font-mono text-gray-300">squeue --me</span>
+      <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-950 text-indigo-400 border border-indigo-900">{{ alias }}</span>
+      <div class="flex-1"></div>
+      <!-- Refresh button -->
+      <button
+        hx-get="/squeue/{{ alias }}"
+        hx-target="#modal-slot"
+        hx-swap="innerHTML"
+        hx-indicator="#global-spinner"
+        class="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-gray-900 hover:bg-gray-800 border border-gray-800 text-gray-400 hover:text-gray-200 text-xs transition-colors">
+        <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Refresh
+      </button>
+      <button @click="$el.closest('[x-data]').remove()"
+              class="p-1.5 rounded-lg text-gray-500 hover:text-gray-200 hover:bg-gray-800 transition-colors">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <!-- Summary bar -->
+    <div class="flex items-center gap-4 px-5 py-2.5 border-b border-gray-800 text-xs">
+      {% if running > 0 %}
+      <span class="text-green-400 font-medium">{{ running }} running</span>
+      {% endif %}
+      {% if pending > 0 %}
+      <span class="text-yellow-400">{{ pending }} pending</span>
+      {% endif %}
+      <span class="text-gray-600">{{ total }} total</span>
+    </div>
+
+    {% if error %}
+    <div class="p-5 text-sm text-red-400">{{ error }}</div>
+
+    {% elif not jobs %}
+    <div class="flex items-center justify-center py-12 text-gray-600 text-sm">
+      No jobs in the queue.
+    </div>
+
+    {% else %}
+    <!-- Queue table -->
+    <div class="flex-1 overflow-auto">
+      <table class="w-full text-xs">
+        <thead class="sticky top-0">
+          <tr class="bg-gray-900 border-b border-gray-800 text-gray-500 uppercase tracking-wider text-[10px]">
+            <th class="px-3 py-2.5 text-left font-medium">Job ID</th>
+            <th class="px-3 py-2.5 text-left font-medium">State</th>
+            <th class="px-3 py-2.5 text-left font-medium">Partition</th>
+            <th class="px-3 py-2.5 text-left font-medium">Name</th>
+            <th class="px-3 py-2.5 text-left font-medium">CPUs</th>
+            <th class="px-3 py-2.5 text-left font-medium">GPUs</th>
+            <th class="px-3 py-2.5 text-left font-medium">Node / Reason</th>
+            <th class="px-3 py-2.5 text-left font-medium">Time</th>
+            <th class="px-3 py-2.5 text-left font-medium w-40">Progress</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-800/60">
+          {% for job in jobs %}
+          <tr class="hover:bg-gray-900/60 transition-colors">
+            <td class="px-3 py-2 font-mono text-indigo-300">{{ job.job_id }}</td>
+            <td class="px-3 py-2">
+              <span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium {{ job.state_class }}">{{ job.state }}</span>
+            </td>
+            <td class="px-3 py-2 text-gray-400">{{ job.partition }}</td>
+            <td class="px-3 py-2 text-gray-300 max-w-[10rem] truncate font-mono" title="{{ job.name }}">{{ job.name }}</td>
+            <td class="px-3 py-2 text-gray-400">{{ job.cpus }}</td>
+            <td class="px-3 py-2 text-gray-400">{{ job.gpus if job.gpus else '' }}</td>
+            <td class="px-3 py-2 font-mono text-gray-500 max-w-[8rem] truncate" title="{{ job.node_reason }}">{{ job.node_reason }}</td>
+            <td class="px-3 py-2 text-gray-400 whitespace-nowrap">
+              {{ job.time_used }}
+              {% if job.time_limit and job.time_limit not in ('UNLIMITED', 'NOT_SET', 'N/A') %}
+              <span class="text-gray-600"> / {{ job.time_limit }}</span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-2">
+              {% if job.progress %}
+              <div class="flex items-center gap-2">
+                <div class="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                  <div class="h-full rounded-full {{ job.progress.color }}" style="width: {{ job.progress.pct }}%"></div>
+                </div>
+                <span class="text-[10px] text-gray-500 whitespace-nowrap">{{ job.progress.pct }}%</span>
+              </div>
+              <div class="text-[10px] text-gray-600 mt-0.5">{{ job.progress.remaining }} left</div>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+  </div>
+</div>

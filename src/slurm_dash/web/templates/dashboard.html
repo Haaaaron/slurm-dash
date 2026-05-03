@@ -1,0 +1,44 @@
+{% extends "layout.html" %}
+{% block content %}
+
+{% if not aliases %}
+  <div class="flex flex-col items-center justify-center py-32 text-gray-500">
+    <p class="text-lg mb-2">No servers configured.</p>
+    <p class="text-sm font-mono">slurm-dash add user@cluster --alias mycluster</p>
+  </div>
+
+{% elif aliases | length == 1 %}
+  {% set alias = aliases[0] %}
+  {% set rows  = servers[alias].rows %}
+  {% set usage = servers[alias].usage %}
+  <div id="server-{{ alias }}">
+    {% include "partials/jobs_table.html" with context %}
+  </div>
+
+{% else %}
+  <!-- Server tabs -->
+  <div x-data="{ tab: '{{ aliases[0] }}' }">
+    <div class="flex gap-1 border-b border-gray-800 mb-4">
+      {% for alias in aliases %}
+      <button
+        @click="tab = '{{ alias }}'"
+        :class="tab === '{{ alias }}'
+          ? 'border-b-2 border-indigo-500 text-indigo-300'
+          : 'text-gray-500 hover:text-gray-300'"
+        class="px-4 py-2 text-sm font-mono transition-colors -mb-px">
+        {{ alias }}
+      </button>
+      {% endfor %}
+    </div>
+
+    {% for alias in aliases %}
+    {% set rows  = servers[alias].rows %}
+    {% set usage = servers[alias].usage %}
+    <div x-show="tab === '{{ alias }}'" id="server-{{ alias }}">
+      {% include "partials/jobs_table.html" with context %}
+    </div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{% endblock %}

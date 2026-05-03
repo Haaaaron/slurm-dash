@@ -11,7 +11,13 @@ requires-python = ">=3.11"
 dependencies = [
     "platformdirs",
     "textual",
+    "fastapi",
+    "uvicorn[standard]",
+    "jinja2",
 ]
 
 [project.scripts]
 slurm-dash = "slurm_dash.cli:main"
+
+[tool.setuptools.package-data]
+slurm_dash = ["web/templates/**/*", "web/templates/*"]

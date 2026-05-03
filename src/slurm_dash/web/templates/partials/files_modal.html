@@ -1,0 +1,140 @@
+<div
+  x-data="{
+    tab: 'snapshot',
+    envExpand: false,
+    activeFile: '',
+    loadPreview(path) {
+      if (!path) return;
+      const url = '/jobs/{{ alias }}/{{ job_id }}/snapshot/file?path=' + encodeURIComponent(path) + '&expand_env=' + (this.envExpand ? 1 : 0);
+      htmx.ajax('GET', url, { target: '#snapshot-preview-{{ alias }}-{{ job_id }}', swap: 'innerHTML' });
+    }
+  }"
+  class="fixed inset-0 z-50 flex items-center justify-center p-4"
+  @keydown.escape.window="$el.remove()">
+
+  <!-- Backdrop -->
+  <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" @click="$el.closest('[x-data]').remove()"></div>
+
+  <!-- Modal panel -->
+  <div class="relative w-full max-w-5xl max-h-[88vh] flex flex-col rounded-2xl border border-gray-700 bg-gray-950 shadow-2xl overflow-hidden">
+
+    <!-- Header -->
+    <div class="flex items-start gap-3 px-5 py-4 border-b border-gray-800">
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-950 text-indigo-400 border border-indigo-900">{{ alias }}</span>
+          <span class="text-gray-300 font-mono font-medium">job {{ job_id }}</span>
+        </div>
+        {% if submit_cmd %}
+        <p class="text-xs font-mono text-gray-500 truncate" title="{{ submit_cmd }}">{{ submit_cmd }}</p>
+        {% endif %}
+        {% if work_dir %}
+        <p class="text-xs font-mono text-gray-600 truncate">{{ work_dir }}</p>
+        {% endif %}
+      </div>
+      <button @click="$el.closest('[x-data]').remove()"
+              class="flex-shrink-0 p-1.5 rounded-lg text-gray-500 hover:text-gray-200 hover:bg-gray-800 transition-colors">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex gap-0 border-b border-gray-800 px-5">
+      <button @click="tab = 'snapshot'"
+              :class="tab === 'snapshot' ? 'border-b-2 border-indigo-500 text-indigo-300' : 'text-gray-500 hover:text-gray-300'"
+              class="px-3 py-2.5 text-xs font-medium transition-colors -mb-px">
+        Submit Snapshot
+      </button>
+      <button @click="tab = 'outputs'; if (!$refs.outputsLoaded.dataset.loaded) { htmx.trigger($refs.outputsLoader, 'load'); $refs.outputsLoaded.dataset.loaded='1'; }"
+              :class="tab === 'outputs' ? 'border-b-2 border-indigo-500 text-indigo-300' : 'text-gray-500 hover:text-gray-300'"
+              class="px-3 py-2.5 text-xs font-medium transition-colors -mb-px">
+        Outputs
+      </button>
+    </div>
+
+    <!-- Tab: Snapshot -->
+    <div x-show="tab === 'snapshot'" class="flex-1 flex overflow-hidden min-h-0">
+      <!-- File list pane -->
+      <div class="w-72 flex-shrink-0 border-r border-gray-800 flex flex-col overflow-hidden">
+        <div class="flex items-center justify-between px-3 py-2 border-b border-gray-800">
+          <span class="text-[10px] text-gray-500 uppercase tracking-wider">Files</span>
+          <label class="flex items-center gap-1.5 text-[10px] text-gray-500 cursor-pointer select-none">
+            <input type="checkbox" x-model="envExpand" @change="loadPreview(activeFile)"
+                   class="rounded border-gray-700 bg-gray-800 text-indigo-500 focus:ring-0 focus:ring-offset-0 w-3 h-3">
+            Expand env
+          </label>
+        </div>
+        <div id="snapshot-files-{{ alias }}-{{ job_id }}"
+             hx-get="/jobs/{{ alias }}/{{ job_id }}/snapshot"
+             hx-trigger="load"
+             hx-swap="innerHTML"
+             class="flex-1 overflow-y-auto">
+          <div class="flex items-center justify-center py-8 text-gray-600 text-xs">
+            <svg class="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+            Loading…
+          </div>
+        </div>
+      </div>
+
+      <!-- Preview pane -->
+      <div class="flex-1 flex flex-col overflow-hidden min-w-0">
+        <div class="flex items-center gap-2 px-3 py-2 border-b border-gray-800">
+          <span x-text="activeFile || 'No file selected'" class="text-[10px] font-mono text-gray-500 truncate flex-1"></span>
+          <button x-show="activeFile"
+                  @click="navigator.clipboard.writeText(activeFile)"
+                  class="text-[10px] text-gray-600 hover:text-gray-300 px-1.5 py-0.5 rounded hover:bg-gray-800 transition-colors">
+            copy path
+          </button>
+        </div>
+        <div id="snapshot-preview-{{ alias }}-{{ job_id }}"
+             class="flex-1 overflow-auto bg-gray-950">
+          <p class="text-gray-600 text-xs italic p-4">Select a file to preview.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Outputs -->
+    <div x-show="tab === 'outputs'" class="flex-1 overflow-auto min-h-0" x-ref="outputsLoaded" data-loaded="">
+      <div x-ref="outputsLoader"
+           id="outputs-{{ alias }}-{{ job_id }}"
+           hx-get="/jobs/{{ alias }}/{{ job_id }}/outputs"
+           hx-swap="innerHTML"
+           class="h-full">
+        <div class="flex items-center justify-center py-12 text-gray-600 text-xs">
+          Click the Outputs tab to load.
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+(function() {
+  document.addEventListener('htmx:afterSwap', function(e) {
+    if (e.detail.target.id === 'snapshot-files-{{ alias }}-{{ job_id }}') {
+      setupFileClicks();
+    }
+  });
+
+  function setupFileClicks() {
+    const container = document.getElementById('snapshot-files-{{ alias }}-{{ job_id }}');
+    if (!container) return;
+    container.querySelectorAll('[data-file-path]').forEach(function(el) {
+      el.addEventListener('click', function() {
+        container.querySelectorAll('[data-file-path]').forEach(function(x) {
+          x.classList.remove('bg-indigo-950', 'text-indigo-300');
+          x.classList.add('text-gray-400');
+        });
+        el.classList.add('bg-indigo-950', 'text-indigo-300');
+        el.classList.remove('text-gray-400');
+
+        const modal = document.getElementById('snapshot-files-{{ alias }}-{{ job_id }}').closest('[x-data]');
+        const data = Alpine.$data(modal);
+        data.activeFile = el.dataset.filePath;
+        data.loadPreview(el.dataset.filePath);
+      });
+    });
+  }
+})();
+</script>

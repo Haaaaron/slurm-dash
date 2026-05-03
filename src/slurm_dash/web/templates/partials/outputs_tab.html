@@ -1,0 +1,91 @@
+<div class="flex flex-col h-full" x-data="{ selectedRow: null, rows: {{ rows | tojson }} }">
+
+  <!-- Toolbar -->
+  <div class="flex items-center gap-3 px-4 py-2.5 border-b border-gray-800">
+    <span class="text-xs text-gray-500 flex-1">{{ status }}</span>
+    <button
+      hx-post="/jobs/{{ alias }}/{{ job_id }}/reprobe"
+      hx-target="#outputs-{{ alias }}-{{ job_id }}"
+      hx-swap="innerHTML"
+      hx-indicator="#global-spinner"
+      class="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-gray-700 text-gray-400 hover:text-gray-200 text-xs transition-colors">
+      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+      Re-probe
+    </button>
+  </div>
+
+  {% if rows %}
+  <!-- Output rows table -->
+  <div class="flex-shrink-0 overflow-x-auto border-b border-gray-800">
+    <table class="w-full text-xs">
+      <thead>
+        <tr class="bg-gray-900 text-gray-500 uppercase tracking-wider text-[10px]">
+          <th class="px-3 py-2 text-left font-medium">Kind</th>
+          <th class="px-3 py-2 text-left font-medium">Path</th>
+          <th class="px-3 py-2 text-left font-medium">Size</th>
+          <th class="px-3 py-2 text-left font-medium">Modified</th>
+          <th class="px-3 py-2 text-left font-medium">Remote</th>
+          <th class="px-3 py-2 text-left font-medium">Local</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-800/50">
+        {% for row in rows %}
+        <tr @click="selectedRow = {{ loop.index0 }}"
+            :class="selectedRow === {{ loop.index0 }} ? 'bg-indigo-950/40' : 'hover:bg-gray-900/60'"
+            class="cursor-pointer transition-colors">
+          <td class="px-3 py-1.5">
+            <span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium {{ row.kind_class }}">{{ row.kind }}</span>
+          </td>
+          <td class="px-3 py-1.5 font-mono text-gray-300 max-w-sm truncate" title="{{ row.path }}">{{ row.path }}</td>
+          <td class="px-3 py-1.5 text-gray-500">{{ row.size_fmt }}</td>
+          <td class="px-3 py-1.5 text-gray-500 whitespace-nowrap">{{ row.mtime_fmt }}</td>
+          <td class="px-3 py-1.5 {{ row.exists_class }}">{{ row.exists_text }}</td>
+          <td class="px-3 py-1.5 {{ row.local_class }}">{{ row.local_text }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Preview pane -->
+  <div class="flex-1 overflow-auto min-h-0 bg-gray-950/50">
+    <template x-if="selectedRow !== null">
+      <div class="p-4">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-[10px] font-medium px-1.5 py-0.5 rounded"
+                :class="rows[selectedRow]?.kind_class"
+                x-text="rows[selectedRow]?.kind"></span>
+          <span class="text-xs font-mono text-cyan-400" x-text="rows[selectedRow]?.path"></span>
+        </div>
+        <div class="text-xs text-gray-500 mb-2 flex gap-4 flex-wrap">
+          <span x-show="rows[selectedRow]?.size_fmt">
+            size: <span class="text-gray-400" x-text="rows[selectedRow]?.size_fmt"></span>
+          </span>
+          <span x-show="rows[selectedRow]?.mtime_fmt">
+            modified: <span class="text-gray-400" x-text="rows[selectedRow]?.mtime_fmt"></span>
+          </span>
+          <span x-show="rows[selectedRow]?.local_text === 'synced'">
+            local: <span class="text-green-400" x-text="rows[selectedRow]?.local_path || '(synced)'"></span>
+          </span>
+        </div>
+        <template x-if="rows[selectedRow]?.head_text">
+          <pre class="text-xs font-mono text-gray-300 whitespace-pre-wrap break-all leading-relaxed border border-gray-800 rounded-lg p-3 bg-gray-900"
+               x-text="rows[selectedRow]?.head_text"></pre>
+        </template>
+        <template x-if="!rows[selectedRow]?.head_text">
+          <p class="text-xs text-gray-600 italic" x-text="rows[selectedRow]?.probed_at ? '(no preview available)' : '(not yet probed — press Re-probe)'"></p>
+        </template>
+      </div>
+    </template>
+    <template x-if="selectedRow === null">
+      <p class="text-xs text-gray-600 italic p-4">Select a row to preview.</p>
+    </template>
+  </div>
+
+  {% else %}
+  <div class="flex items-center justify-center flex-1 py-12 text-gray-600 text-xs">
+    No outputs recorded — press Re-probe to run the inferrer + SSH probe.
+  </div>
+  {% endif %}
+
+</div>

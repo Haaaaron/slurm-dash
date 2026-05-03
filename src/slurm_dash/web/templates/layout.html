@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Slurm Dash</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.14.3/dist/cdn.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            gray: {
+              950: '#0a0c10',
+            }
+          },
+          fontFamily: {
+            mono: ['JetBrains Mono', 'Cascadia Code', 'Fira Code', 'ui-monospace', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #0a0c10; }
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline-flex; }
+    .htmx-request.htmx-indicator { display: inline-flex; }
+    tr.htmx-swapping { opacity: 0; transition: opacity 0.2s ease-out; }
+    /* Custom scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #1a1d24; }
+    ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+  </style>
+</head>
+<body class="h-full text-gray-100 font-sans antialiased">
+
+  <!-- Navbar -->
+  <nav class="border-b border-gray-800 bg-gray-950/80 backdrop-blur sticky top-0 z-30">
+    <div class="max-w-screen-2xl mx-auto px-4 h-12 flex items-center gap-3">
+      <span class="text-indigo-400 font-mono font-bold tracking-tight">slurm-dash</span>
+      <span class="text-gray-600 text-xs">web</span>
+      <div class="flex-1"></div>
+      <!-- Global loading indicator -->
+      <span id="global-spinner" class="htmx-indicator text-xs text-gray-500 flex items-center gap-1.5">
+        <svg class="animate-spin h-3.5 w-3.5 text-indigo-400" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+        </svg>
+        syncing…
+      </span>
+    </div>
+  </nav>
+
+  <!-- Modal overlay slot -->
+  <div id="modal-slot"></div>
+
+  <!-- Page content -->
+  <main class="max-w-screen-2xl mx-auto px-4 py-6">
+    {% block content %}{% endblock %}
+  </main>
+
+</body>
+</html>

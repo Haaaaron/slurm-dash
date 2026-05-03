@@ -1,0 +1,7 @@
+{% if error %}
+  <p class="text-xs text-red-400 p-4">{{ error }}</p>
+{% elif content %}
+  <pre class="text-xs font-mono text-gray-300 p-4 whitespace-pre-wrap break-all leading-relaxed">{{ content }}</pre>
+{% else %}
+  <p class="text-xs text-gray-600 italic p-4">Empty file.</p>
+{% endif %}
