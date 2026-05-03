@@ -1,0 +1,7 @@
+*env*
+build
+__pycache__/
+*.pyc
+src/*.egg-info/
+build/
+slurm-dash-env/

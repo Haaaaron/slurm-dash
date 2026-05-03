@@ -1,0 +1,9 @@
+# Exclude large data or cache files from slurm-dash capture
+__pycache__/
+*.pyc
+.env
+.venv/
+env/
+huge_dataset.hdf5
+*.pt
+*.pth
