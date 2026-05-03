@@ -12,54 +12,85 @@ from .config import (
 from .remote_manager import run_ssh, run_scp, RemoteManagerError
 from .ui.tui import run_tui
 
-BASH_INTERCEPTOR = r"""
-# --- SLURM DASH INTERCEPTOR ---
-sbatch() {
-    export SLURM_TRACKER_MAX_MB=${SLURM_TRACKER_MAX_MB:-10}
-    local stage=""
-    # Refuse to snapshot $HOME or filesystem roots — a full copy there hangs.
-    case "$PWD" in
-        "$HOME"|"$HOME/"|/|"") ;;
-        *)
-            mkdir -p "$HOME/.slurm_tracker/staging" 2>/dev/null
-            stage=$(mktemp -d "$HOME/.slurm_tracker/staging/XXXXXX" 2>/dev/null) || stage=""
-            if [ -n "$stage" ]; then
-                # Try reflink (instant, COW-safe), then hardlink (instant, safe vs. atomic saves
-                # and subsequent sbatch runs). Use =always so reflink fails fast on FSes that
-                # don't support it, instead of silently falling back to a full byte-copy.
-                cp --reflink=always -a "$PWD"/. "$stage"/ 2>/dev/null \
-                    || cp -al "$PWD"/. "$stage"/ 2>/dev/null \
-                    || { rm -rf "$stage"; stage=""; }
-            fi
-            ;;
-    esac
-    local output
-    output=$(command sbatch "$@")
-    local rc=$?
-    echo "$output"
-    local job_id
-    job_id=$(echo "$output" | grep -oE '[0-9]+' | tail -n 1)
-    if [ -n "$job_id" ]; then
-        ~/.slurm_tracker/capture.py "$job_id" "$stage" "$PWD" "$@" > /dev/null 2>&1 &
-    elif [ -n "$stage" ]; then
-        rm -rf "$stage"
-    fi
-    return $rc
-}
-export -f sbatch
-# --- END SLURM DASH INTERCEPTOR ---
+# Wrapper script template — __REAL_SBATCH__ is replaced at install time with
+# the resolved path of the real sbatch binary on the remote.
+_SBATCH_WRAPPER_TEMPLATE = r"""#!/bin/bash
+export SLURM_TRACKER_MAX_MB="${SLURM_TRACKER_MAX_MB:-10}"
+stage=""
+# Refuse to snapshot $HOME or filesystem roots — a full copy there hangs.
+case "$PWD" in
+    "$HOME"|"$HOME/"|/|"") ;;
+    *)
+        mkdir -p "$HOME/.slurm_tracker/staging" 2>/dev/null
+        stage=$(mktemp -d "$HOME/.slurm_tracker/staging/XXXXXX" 2>/dev/null) || stage=""
+        if [ -n "$stage" ]; then
+            cp --reflink=always -a "$PWD"/. "$stage"/ 2>/dev/null \
+                || cp -al "$PWD"/. "$stage"/ 2>/dev/null \
+                || { rm -rf "$stage"; stage=""; }
+        fi
+        ;;
+esac
+_output=$(__REAL_SBATCH__ "$@")
+_rc=$?
+echo "$_output"
+_job_id=$(echo "$_output" | grep -oE '[0-9]+' | tail -n 1)
+if [ -n "$_job_id" ]; then
+    ~/.slurm_tracker/capture.py "$_job_id" "$stage" "$PWD" "$@" >/dev/null 2>&1 &
+elif [ -n "$stage" ]; then
+    rm -rf "$stage"
+fi
+exit $_rc
 """
 
 
 def _inject_interceptor_cmd():
-    quoted = shlex.quote(BASH_INTERCEPTOR)
-    return textwrap.dedent(f"""
-        for rc in ~/.bashrc ~/.zshrc; do
-            if [ -f "$rc" ] && ! grep -q "SLURM DASH INTERCEPTOR" "$rc"; then
-                printf '%s\\n' {quoted} >> "$rc"
-            fi
-        done
+    # Runs on the remote via python3 -c. Finds the real sbatch binary, writes
+    # a standalone wrapper script at ~/.slurm_tracker/bin/sbatch (so it works
+    # from bash scripts and subprocesses, not just interactive shells), and
+    # prepends that dir to PATH in rc files.
+    #
+    # The wrapper template is embedded as a repr() literal so that textwrap.dedent
+    # works correctly (bash lines at column 0 would otherwise defeat dedent).
+    python_script = textwrap.dedent(f"""
+        import os, stat
+        home = os.path.expanduser('~')
+        bin_dir = os.path.join(home, '.slurm_tracker', 'bin')
+        os.makedirs(bin_dir, exist_ok=True)
+
+        path_dirs = [d for d in os.environ.get('PATH', '').split(':')
+                     if d and d != bin_dir]
+        real_sbatch = next(
+            (os.path.join(d, 'sbatch') for d in path_dirs
+             if os.path.isfile(os.path.join(d, 'sbatch'))
+             and os.access(os.path.join(d, 'sbatch'), os.X_OK)),
+            'sbatch'
+        )
+
+        wrapper = {repr(_SBATCH_WRAPPER_TEMPLATE)}.replace('__REAL_SBATCH__', real_sbatch)
+
+        wrapper_path = os.path.join(bin_dir, 'sbatch')
+        with open(wrapper_path, 'w') as f:
+            f.write(wrapper)
+        os.chmod(wrapper_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP
+                               | stat.S_IROTH | stat.S_IXOTH)
+
+        path_block = (
+            '\\n# --- SLURM DASH INTERCEPTOR ---\\n'
+            'export PATH="$HOME/.slurm_tracker/bin:$PATH"\\n'
+            '# --- END SLURM DASH INTERCEPTOR ---\\n'
+        )
+        for rc in ['~/.bashrc', '~/.zshrc']:
+            rc_path = os.path.expanduser(rc)
+            if os.path.isfile(rc_path):
+                content = open(rc_path).read()
+                if 'SLURM DASH INTERCEPTOR' not in content:
+                    with open(rc_path, 'a') as f:
+                        f.write(path_block)
+
+        print(f'Wrapper: {{wrapper_path}}')
+        print(f'Real sbatch: {{real_sbatch}}')
     """).strip()
+    return f"python3 -c {shlex.quote(python_script)}"
 
 
 def _init_remote_db():
