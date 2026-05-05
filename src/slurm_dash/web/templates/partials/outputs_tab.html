@@ -10,7 +10,7 @@
       hx-indicator="#global-spinner"
       class="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-gray-700 text-gray-400 hover:text-gray-200 text-xs transition-colors">
       <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-      Re-probe
+      Sync
     </button>
   </div>
 
@@ -73,7 +73,7 @@
                x-text="rows[selectedRow]?.head_text"></pre>
         </template>
         <template x-if="!rows[selectedRow]?.head_text">
-          <p class="text-xs text-gray-600 italic" x-text="rows[selectedRow]?.probed_at ? '(no preview available)' : '(not yet probed — press Re-probe)'"></p>
+          <p class="text-xs text-gray-600 italic" x-text="rows[selectedRow]?.probed_at ? '(no preview available)' : '(not yet probed — press Sync)'"></p>
         </template>
       </div>
     </template>
@@ -84,7 +84,7 @@
 
   {% else %}
   <div class="flex items-center justify-center flex-1 py-12 text-gray-600 text-xs">
-    No outputs recorded — press Re-probe to run the inferrer + SSH probe.
+    No outputs recorded — press Sync to run the inferrer + SSH probe.
   </div>
   {% endif %}
 

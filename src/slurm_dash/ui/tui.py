@@ -11,7 +11,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button, DataTable, Footer, Header,
-    Label, ListItem, ListView, RichLog, Switch, TabbedContent, TabPane,
+    Label, RichLog, Switch, TabbedContent, TabPane, Tree,
 )
 
 _ENV_VAR_RE = re.compile(
@@ -163,7 +163,7 @@ class FilesModal(ModalScreen):
     }
     FilesModal TabbedContent { height: 1fr; }
     FilesModal Horizontal#split { height: 1fr; }
-    FilesModal ListView#file-list {
+    FilesModal Tree#file-list {
         width: 40%;
         border-right: solid $accent;
     }
@@ -229,7 +229,7 @@ class FilesModal(ModalScreen):
                     self._env_dict = {str(k): str(v) for k, v in parsed.items()}
             except (TypeError, ValueError):
                 pass
-        self.entries: list[str] = []  # parallel to ListView items; entry is "" for non-file rows
+        self.entries: list[str] = []  # kept for compatibility; actual paths stored as node.data
         self._current_path: str | None = None
         self._current_body: str = ""
         self._substitute_env: bool = False
@@ -272,14 +272,16 @@ class FilesModal(ModalScreen):
                         yield sw
                         yield Label(env_label_text, id="env-toggle-label")
                     with Horizontal(id="split"):
-                        yield ListView(id="file-list")
+                        file_tree = Tree("Snapshot", id="file-list")
+                        file_tree.show_root = False
+                        yield file_tree
                         with Vertical(id="viewer"):
                             yield Label("(select a file)", id="file-header")
                             yield RichLog(id="file-content", wrap=True,
                                           markup=False, highlight=False)
                 with TabPane("Output", id="tab-output"):
                     with Horizontal(id="output-toolbar"):
-                        yield Button("Re-probe", id="reprobe", variant="primary")
+                        yield Button("Sync", id="reprobe", variant="primary")
                         yield Label("", id="probe-status")
                     with Vertical(id="output-split"):
                         yield DataTable(id="output-table",
@@ -315,25 +317,67 @@ class FilesModal(ModalScreen):
             files = ["(no ssh_string or snapshot_path)"]
 
         def _populate():
-            lv = self.query_one("#file-list", ListView)
-            lv.clear()
+            tree = self.query_one("#file-list", Tree)
+            tree.clear()
             self.entries = []
             pattern = re.escape(self.job_id) if self.job_id else ""
-            for f in files:
-                is_file = bool(f) and not f.endswith("/") and not f.startswith("(")
-                self.entries.append(f if is_file else "")
-                label_text = Text(f)
-                if pattern:
-                    label_text.highlight_regex(pattern, style=JOB_HIGHLIGHT_STYLE)
-                lv.append(ListItem(Label(label_text)))
+            dir_nodes: dict[str, object] = {}
+            _submit_node = None
+
+            for raw in files:
+                path = raw
+                if path.startswith("./"):
+                    path = path[2:]
+                if not path:
+                    continue
+                is_dir = path.endswith("/")
+                clean = path.rstrip("/")
+                if not clean:
+                    continue
+                if clean.startswith("("):
+                    tree.root.add_leaf(Text(clean, style="red"), data="")
+                    continue
+                parts = clean.split("/")
+                parent = tree.root
+                for depth in range(len(parts) - 1):
+                    dir_key = "/".join(parts[: depth + 1])
+                    if dir_key not in dir_nodes:
+                        n = parent.add(Text(parts[depth], style="bold"), expand=False)
+                        dir_nodes[dir_key] = n
+                    parent = dir_nodes[dir_key]
+                leaf_name = parts[-1]
+                if is_dir:
+                    dir_key = clean
+                    if dir_key not in dir_nodes:
+                        lbl = Text(leaf_name, style="bold")
+                        n = parent.add(lbl, expand=False)
+                        dir_nodes[dir_key] = n
+                else:
+                    if path == "submit_script.sh":
+                        lbl = Text("◆ ", style="bold yellow")
+                        lbl.append(leaf_name, style="bold yellow")
+                    else:
+                        lbl = Text(leaf_name)
+                    if pattern:
+                        lbl.highlight_regex(pattern, style=JOB_HIGHLIGHT_STYLE)
+                    leaf = parent.add_leaf(lbl, data=path)
+                    if path == "submit_script.sh":
+                        _submit_node = leaf
+
+            if _submit_node is not None:
+                try:
+                    tree.select_node(_submit_node)
+                    tree.scroll_to_node(_submit_node)
+                except Exception:
+                    pass
+                self._fetch_file("submit_script.sh")
 
         self.app.call_from_thread(_populate)
 
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        idx = event.list_view.index
-        if idx is None or idx >= len(self.entries):
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        if event.control.id != "file-list":
             return
-        path = self.entries[idx]
+        path = event.node.data
         if not path:
             return
         self._current_path = path
@@ -430,7 +474,7 @@ class FilesModal(ModalScreen):
         table.clear()
         if not rows:
             self._set_probe_status(
-                "No outputs recorded yet — press Re-probe to run the inferrer + SSH probe."
+                "No outputs recorded yet — press Sync to run the inferrer + SSH probe."
             )
             return
         any_probed = any(r.get("probed_at") for r in rows)
@@ -469,7 +513,7 @@ class FilesModal(ModalScreen):
             )
         else:
             self._set_probe_status(
-                f"{len(rows)} inferred entries (not yet probed) — press Re-probe."
+                f"{len(rows)} inferred entries (not yet probed) — press Sync."
             )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -878,6 +922,7 @@ class SlurmDashTUI(App):
         for alias, table in self.tables.items():
             self._render_local(alias, table, status_map=None)
         self.background_refresh()
+        self.set_interval(300, self.background_refresh)
 
     def _render_local(self, alias: str, table: DataTable, status_map: dict | None) -> None:
         usage = self.usage_labels.get(alias)

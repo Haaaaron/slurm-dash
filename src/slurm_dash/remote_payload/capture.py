@@ -231,11 +231,13 @@ def _has_array_directive(argv, script_text):
 _ASSIGN_RE = re.compile(r"^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=")
 
 
-def _eval_script_exports(script_text, job_id, parent_env):
+def _eval_script_exports(script_text, job_id, parent_env, positional_args=None):
     """Return a dict of vars defined by assignment/export lines in
     `script_text`, evaluated in a bash subshell that inherits `parent_env`
-    plus a synthesized SLURM_JOB_ID. Compute lines (python, srun, mkdir, ...)
-    are filtered out. Returns only entries that differ from parent_env."""
+    plus a synthesized SLURM_JOB_ID. Positional args ($1, $2, ...) from the
+    sbatch invocation are forwarded so variables like TEMP=$1 resolve correctly.
+    Compute lines (python, srun, mkdir, ...) are filtered out.
+    Returns only entries that differ from parent_env."""
     if not script_text:
         return {}
     assign_lines = [
@@ -248,9 +250,12 @@ def _eval_script_exports(script_text, job_id, parent_env):
     env_in.setdefault("SLURM_JOB_ID", str(job_id))
     env_in.setdefault("SLURM_JOBID", str(job_id))
     snippet = "set -a\n" + "\n".join(assign_lines) + "\n/usr/bin/env -0\n"
+    # Pass positional args so $1, $2, ... resolve inside the script's assignment
+    # lines. bash -c 'script' name $1 $2 ... sets $0=name, $1=first-arg, etc.
+    pos = list(positional_args) if positional_args else []
     try:
         result = subprocess.run(
-            ["bash", "-c", snippet],
+            ["bash", "-c", snippet, "sbatch_script", *pos],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env_in, timeout=10,
         )
@@ -306,6 +311,21 @@ def main():
         )
         array_base_id = job_id if _has_array_directive(sbatch_argv, script_text) else None
 
+        # Find the positional arguments ($1, $2, ...) passed after the script
+        # in the sbatch command line, so assignment lines like TEMP=$1 resolve.
+        _script_idx = None
+        for _i, _arg in enumerate(sbatch_argv):
+            if not _arg or _arg.startswith("-"):
+                continue
+            _search = (
+                [_arg] if os.path.isabs(_arg)
+                else [_arg, os.path.join(walk_dir, _arg), os.path.join(original_cwd, _arg)]
+            )
+            if any(os.path.isfile(_c) for _c in _search):
+                _script_idx = _i
+                break
+        positional_args = list(sbatch_argv[_script_idx + 1:]) if _script_idx is not None else []
+
         # Snapshot the user's shell env at submit time. capture.py inherits
         # the parent shell's environment via the bash sbatch() wrapper.
         env_vars_dict = dict(os.environ)
@@ -315,7 +335,7 @@ def main():
         # with SLURM_JOB_ID synthesized, then overlay the result so vars
         # like $OUTPUT_DIR / $RUN_TAG end up in the captured env_vars.
         try:
-            extra = _eval_script_exports(script_text, job_id, env_vars_dict)
+            extra = _eval_script_exports(script_text, job_id, env_vars_dict, positional_args)
             if extra:
                 env_vars_dict.update(extra)
         except Exception as e:

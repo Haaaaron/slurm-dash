@@ -135,6 +135,9 @@
         data.loadPreview(el.dataset.filePath);
       });
     });
+    // Auto-open the captured submit script when the file list first loads
+    const autoOpen = container.querySelector('[data-auto-open]');
+    if (autoOpen) autoOpen.click();
   }
 })();
 </script>

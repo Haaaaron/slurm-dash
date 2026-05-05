@@ -317,10 +317,11 @@ def _build_file_tree(paths: list[str]) -> list[dict]:
         dirs  = sorted([k for k in child_keys if nodes[k]["is_dir"]],     key=lambda k: nodes[k]["name"].lower())
         files = sorted([k for k in child_keys if not nodes[k]["is_dir"]], key=lambda k: nodes[k]["name"].lower())
         return {
-            "name":     n["name"],
-            "path":     n["path"] if not n["is_dir"] else "",
-            "is_dir":   n["is_dir"],
-            "children": [make_node(k) for k in dirs + files],
+            "name":             n["name"],
+            "path":             n["path"] if not n["is_dir"] else "",
+            "is_dir":           n["is_dir"],
+            "is_submit_script": n["path"] == "submit_script.sh" and not n["is_dir"],
+            "children":         [make_node(k) for k in dirs + files],
         }
 
     root_keys = [k for k, v in nodes.items() if not v["parent"]]
@@ -551,13 +552,13 @@ def _outputs_response(request: Request, alias: str, job_id: str, rows: list[dict
         })
 
     if not rows:
-        status = "No outputs recorded — press Re-probe to run the inferrer + SSH probe."
+        status = "No outputs recorded — press Sync to run the inferrer + SSH probe."
     elif any(r.get("probed_at") for r in rows):
         synced = sum(1 for r in rows if r.get("local_path"))
         last_probe = max((r.get("probed_at") or 0) for r in rows)
         status = f"{len(rows)} entries · {synced} synced locally · last probe {_fmt_dt(last_probe)}"
     else:
-        status = f"{len(rows)} inferred entries (not yet probed) — press Re-probe."
+        status = f"{len(rows)} inferred entries (not yet probed) — press Sync."
 
     return templates.TemplateResponse(
         request, "partials/outputs_tab.html",
