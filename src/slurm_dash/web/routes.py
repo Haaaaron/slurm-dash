@@ -11,8 +11,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from ..config import get_db_connection, load_config
-from ..jobs import delete_job as _delete_job
+from ..jobs import delete_job as _delete_job, delete_jobs as _delete_jobs
 from ..output_probe import load_outputs, run_full_probe
+from ..output_inferrer import get_slurm_outputs
 from ..remote_manager import run_ssh
 from ..slurm_api import get_live_status, _parse_gpus_from_gres
 from ..sync_engine import sync_server
@@ -140,27 +141,61 @@ def _state_class(state: str) -> str:
     return _STATE_CLASS.get(base, "bg-gray-800 text-gray-400")
 
 
-def _load_jobs(alias: str) -> list[dict]:
+def _load_jobs(alias: str, tag_filter: str | None = None) -> list[dict]:
     conn = get_db_connection()
     try:
-        rows = conn.execute(
-            "SELECT job_id, array_base_id, submit_time, work_dir, git_hash, "
-            "snapshot_path, submit_argv, env_vars, "
-            "final_state, final_cpus, final_req_mem, final_max_rss, "
-            "final_gpus, final_node_list "
-            "FROM jobs WHERE server_alias = ? AND is_deleted = 0 "
-            "ORDER BY submit_time DESC",
-            (alias,),
-        ).fetchall()
+        if tag_filter:
+            rows = conn.execute(
+                "SELECT j.job_id, j.array_base_id, j.submit_time, j.work_dir, j.git_hash, "
+                "j.snapshot_path, j.submit_argv, j.env_vars, "
+                "j.final_state, j.final_cpus, j.final_req_mem, j.final_max_rss, "
+                "j.final_gpus, j.final_gpu_model, j.final_node_list "
+                "FROM jobs j "
+                "INNER JOIN tags t ON j.server_alias = t.server_alias AND j.job_id = t.job_id "
+                "WHERE j.server_alias = ? AND j.is_deleted = 0 AND t.tag_name = ? "
+                "ORDER BY j.submit_time DESC",
+                (alias, tag_filter),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT job_id, array_base_id, submit_time, work_dir, git_hash, "
+                "snapshot_path, submit_argv, env_vars, "
+                "final_state, final_cpus, final_req_mem, final_max_rss, "
+                "final_gpus, final_gpu_model, final_node_list "
+                "FROM jobs WHERE server_alias = ? AND is_deleted = 0 "
+                "ORDER BY submit_time DESC",
+                (alias,),
+            ).fetchall()
     finally:
         conn.close()
     cols = [
         "job_id", "array_base_id", "submit_time", "work_dir", "git_hash",
         "snapshot_path", "submit_argv", "env_vars",
         "final_state", "final_cpus", "final_req_mem", "final_max_rss",
-        "final_gpus", "final_node_list",
+        "final_gpus", "final_gpu_model", "final_node_list",
     ]
-    return [dict(zip(cols, r)) for r in rows]
+    jobs = [dict(zip(cols, r)) for r in rows]
+
+    # Load tags for all jobs in one query (batch, not N+1)
+    conn = get_db_connection()
+    try:
+        tag_rows = conn.execute(
+            "SELECT job_id, tag_name FROM tags WHERE server_alias = ? ORDER BY job_id, tag_name",
+            (alias,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    tags_by_job = {}
+    for job_id, tag_name in tag_rows:
+        if job_id not in tags_by_job:
+            tags_by_job[job_id] = []
+        tags_by_job[job_id].append(tag_name)
+
+    for job in jobs:
+        job["tags"] = tags_by_job.get(job["job_id"], [])
+
+    return jobs
 
 
 def _oldest_unfinished(alias: str) -> float | None:
@@ -184,13 +219,13 @@ def _finalize_terminal(alias: str, status_map: dict) -> None:
             if _is_terminal(st.get("state", "")):
                 conn.execute(
                     "UPDATE jobs SET final_state=?, final_cpus=?, final_req_mem=?, "
-                    "final_max_rss=?, final_gpus=?, final_node_list=? "
+                    "final_max_rss=?, final_gpus=?, final_gpu_model=?, final_node_list=? "
                     "WHERE server_alias=? AND job_id=? "
                     "AND (final_state IS NULL OR final_state='')",
                     (
                         st["state"], st.get("cpus"), st.get("req_mem"),
-                        st.get("max_rss"), st.get("gpus", 0), st.get("node_list"),
-                        alias, job_id,
+                        st.get("max_rss"), st.get("gpus", 0), st.get("gpu_model", ""),
+                        st.get("node_list"), alias, job_id,
                     ),
                 )
         conn.commit()
@@ -208,15 +243,15 @@ def _prepare_rows(jobs: list[dict], status_map: dict | None) -> list[dict]:
             state = job["final_state"]
             cpus      = job.get("final_cpus") or ""
             req_mem   = job.get("final_req_mem") or ""
-            max_rss   = job.get("final_max_rss") or ""
             gpus      = job.get("final_gpus") or 0
+            gpu_model = job.get("final_gpu_model") or ""
             node_list = job.get("final_node_list") or ""
         else:
             state     = live.get("state") or ("" if status_map is None else "COMPLETED")
             cpus      = live.get("cpus") or ""
             req_mem   = live.get("req_mem") or ""
-            max_rss   = live.get("max_rss") or ""
             gpus      = live.get("gpus") or 0
+            gpu_model = live.get("gpu_model") or ""
             node_list = live.get("node_list") or ""
 
         submit_argv = []
@@ -226,9 +261,19 @@ def _prepare_rows(jobs: list[dict], status_map: dict | None) -> list[dict]:
             except Exception:
                 pass
 
+        # Extract job name from submit_argv or use default
+        job_name = ""
+        for i, arg in enumerate(submit_argv):
+            if arg in ("--job-name", "-J") and i + 1 < len(submit_argv):
+                job_name = submit_argv[i + 1]
+                break
+            elif isinstance(arg, str) and arg.startswith("--job-name="):
+                job_name = arg.split("=", 1)[1]
+                break
+
         rows.append({
             "job_id":       jid,
-            "array":        job.get("array_base_id") or "",
+            "job_name":     job_name,
             "state":        state,
             "state_class":  _state_class(state),
             "submit_time":  _fmt_dt(job.get("submit_time")),
@@ -236,11 +281,12 @@ def _prepare_rows(jobs: list[dict], status_map: dict | None) -> list[dict]:
             "git_hash":     (job.get("git_hash") or "")[:7],
             "cpus":         cpus,
             "req_mem":      req_mem,
-            "max_rss":      max_rss,
             "gpus":         gpus,
+            "gpu_model":    gpu_model,
             "node_list":    node_list,
             "snapshot_path": job.get("snapshot_path") or "",
             "submit_cmd":   "sbatch " + shlex.join(str(a) for a in submit_argv) if submit_argv else "",
+            "tags":         job.get("tags", []),
         })
     return rows
 
@@ -351,20 +397,30 @@ def index(request: Request):
 
 @router.get("/jobs/{alias}", response_class=HTMLResponse)
 def jobs_table(request: Request, alias: str):
-    jobs = _load_jobs(alias)
+    from ..jobs import list_all_tags
+    tag_filter = request.query_params.get("tag")
+    jobs = _load_jobs(alias, tag_filter=tag_filter)
     since = _oldest_unfinished(alias)
     status_map = get_live_status(alias, since)
     if status_map:
         _finalize_terminal(alias, status_map)
     rows = _prepare_rows(jobs, status_map)
+    tags = list_all_tags(alias)
     return templates.TemplateResponse(
         request, "partials/jobs_table.html",
-        {"alias": alias, "rows": rows, "usage": _compute_usage(rows)},
+        {
+            "alias": alias,
+            "rows": rows,
+            "usage": _compute_usage(rows),
+            "active_tag": tag_filter,
+            "tags": tags,
+        },
     )
 
 
 @router.post("/sync/{alias}", response_class=HTMLResponse)
 def sync_alias(request: Request, alias: str):
+    from ..jobs import list_all_tags
     config = load_config()
     server = config.get("servers", {}).get(alias, {})
     ssh_string = server.get("ssh_string")
@@ -377,9 +433,16 @@ def sync_alias(request: Request, alias: str):
         status_map = {}
     jobs = _load_jobs(alias)
     rows = _prepare_rows(jobs, status_map)
+    tags = list_all_tags(alias)
     return templates.TemplateResponse(
         request, "partials/jobs_table.html",
-        {"alias": alias, "rows": rows, "usage": _compute_usage(rows)},
+        {
+            "alias": alias,
+            "rows": rows,
+            "usage": _compute_usage(rows),
+            "active_tag": None,
+            "tags": tags,
+        },
     )
 
 
@@ -391,6 +454,51 @@ def delete_job(alias: str, job_id: str):
     return HTMLResponse("")
 
 
+@router.post("/jobs/{alias}/delete-multiple", response_class=HTMLResponse)
+async def delete_multiple_jobs(request: Request, alias: str):
+    try:
+        data = await request.json()
+        job_ids = data.get("job_ids", [])
+        if job_ids:
+            _delete_jobs(alias, job_ids)
+        return HTMLResponse("")
+    except Exception:
+        return HTMLResponse("", status_code=400)
+
+
+# ── tag actions ───────────────────────────────────────────────────────────────
+
+@router.post("/jobs/{alias}/tag-multiple", response_class=HTMLResponse)
+async def tag_multiple_jobs(request: Request, alias: str):
+    from ..jobs import add_tags
+    try:
+        data = await request.json()
+        job_ids = data.get("job_ids", [])
+        tag_name = data.get("tag_name", "").strip()
+        if job_ids and tag_name:
+            add_tags(alias, job_ids, tag_name)
+        return HTMLResponse("")
+    except Exception:
+        return HTMLResponse("", status_code=400)
+
+
+@router.delete("/jobs/{alias}/{job_id}/tags/{tag_name}", response_class=HTMLResponse)
+def delete_tag(alias: str, job_id: str, tag_name: str):
+    from ..jobs import remove_tag
+    remove_tag(alias, job_id, tag_name)
+    return HTMLResponse("")
+
+
+@router.get("/tags/{alias}")
+def list_tags(request: Request, alias: str):
+    from ..jobs import list_all_tags
+    tags = list_all_tags(alias)
+    return templates.TemplateResponse(
+        request, "partials/tag_filter_bar.html",
+        {"alias": alias, "tags": tags, "active_tag": None},
+    )
+
+
 # ── files modal ───────────────────────────────────────────────────────────────
 
 @router.get("/jobs/{alias}/{job_id}/files", response_class=HTMLResponse)
@@ -398,7 +506,7 @@ def files_modal(request: Request, alias: str, job_id: str):
     conn = get_db_connection()
     try:
         row = conn.execute(
-            "SELECT submit_argv, work_dir, snapshot_path, env_vars "
+            "SELECT submit_argv, submit_script, work_dir, snapshot_path, env_vars "
             "FROM jobs WHERE server_alias=? AND job_id=?",
             (alias, job_id),
         ).fetchone()
@@ -406,21 +514,35 @@ def files_modal(request: Request, alias: str, job_id: str):
         conn.close()
 
     submit_cmd = work_dir = snapshot_path = ""
+    submit_argv_json = submit_script = ""
     env_vars: dict = {}
+    slurm_outputs = {"output": "", "error": ""}
+
     if row:
         if row[0]:
             try:
                 argv = json.loads(row[0])
                 submit_cmd = "sbatch " + shlex.join(str(a) for a in argv)
+                submit_argv_json = row[0]
             except Exception:
                 pass
-        work_dir      = row[1] or ""
-        snapshot_path = row[2] or ""
-        if row[3]:
+        submit_script = row[1] or ""
+        work_dir      = row[2] or ""
+        snapshot_path = row[3] or ""
+        if row[4]:
             try:
-                env_vars = json.loads(row[3])
+                env_vars = json.loads(row[4])
             except Exception:
                 pass
+
+        if work_dir:
+            slurm_outputs = get_slurm_outputs(
+                job_id=job_id,
+                work_dir=work_dir,
+                submit_argv_json=submit_argv_json,
+                submit_script=submit_script,
+                env_vars_json=row[4],
+            )
 
     return templates.TemplateResponse(
         request, "partials/files_modal.html",
@@ -428,6 +550,8 @@ def files_modal(request: Request, alias: str, job_id: str):
             "alias": alias, "job_id": job_id,
             "submit_cmd": submit_cmd, "work_dir": work_dir,
             "has_snapshot": bool(snapshot_path),
+            "slurm_output": slurm_outputs.get("output", ""),
+            "slurm_error": slurm_outputs.get("error", ""),
         },
     )
 
@@ -437,7 +561,8 @@ def snapshot_file_list(request: Request, alias: str, job_id: str):
     conn = get_db_connection()
     try:
         row = conn.execute(
-            "SELECT snapshot_path FROM jobs WHERE server_alias=? AND job_id=?",
+            "SELECT submit_argv, submit_script, work_dir, snapshot_path, env_vars "
+            "FROM jobs WHERE server_alias=? AND job_id=?",
             (alias, job_id),
         ).fetchone()
     finally:
@@ -445,29 +570,55 @@ def snapshot_file_list(request: Request, alias: str, job_id: str):
 
     config = load_config()
     ssh = (config.get("servers", {}).get(alias) or {}).get("ssh_string", "")
-    files: list[str] = []
-    error = ""
 
-    tree: list[dict] = []
+    snapshot_tree: list[dict] = []
     error = ""
+    slurm_output = ""
+    slurm_error = ""
 
-    if row and row[0] and ssh:
-        try:
-            result = run_ssh(ssh, f"tar -tzf {shlex.quote(row[0])}", check=False, timeout=15)
-            if result.returncode == 0:
-                tree = _build_file_tree([f for f in result.stdout.splitlines() if f])
-            else:
-                error = result.stderr.strip() or "tar failed"
-        except Exception as e:
-            error = str(e)
-    elif not row or not row[0]:
-        error = "No snapshot available for this job."
-    elif not ssh:
-        error = "No SSH connection configured."
+    if row:
+        work_dir = row[2] or ""
+        snapshot_path = row[3] or ""
+        submit_argv_json = row[0]
+        submit_script = row[1] or ""
+        env_vars_json = row[4]
+
+        # Extract SLURM outputs
+        if work_dir:
+            slurm_outputs = get_slurm_outputs(
+                job_id=job_id,
+                work_dir=work_dir,
+                submit_argv_json=submit_argv_json,
+                submit_script=submit_script,
+                env_vars_json=env_vars_json,
+            )
+            slurm_output = slurm_outputs.get("output", "")
+            slurm_error = slurm_outputs.get("error", "")
+
+        # Build snapshot tree
+        if snapshot_path and ssh:
+            try:
+                result = run_ssh(ssh, f"tar -tzf {shlex.quote(snapshot_path)}", check=False, timeout=15)
+                if result.returncode == 0:
+                    snapshot_tree = _build_file_tree([f for f in result.stdout.splitlines() if f])
+                else:
+                    error = result.stderr.strip() or "tar failed"
+            except Exception as e:
+                error = str(e)
+        elif not snapshot_path:
+            error = "No snapshot available for this job."
+        elif not ssh:
+            error = "No SSH connection configured."
 
     return templates.TemplateResponse(
         request, "partials/snapshot_file_list.html",
-        {"alias": alias, "job_id": job_id, "tree": tree, "error": error},
+        {
+            "alias": alias, "job_id": job_id,
+            "snapshot_tree": snapshot_tree,
+            "slurm_output": slurm_output,
+            "slurm_error": slurm_error,
+            "error": error,
+        },
     )
 
 
@@ -589,7 +740,8 @@ def squeue_modal(request: Request, alias: str):
                     jid, state, partition, name, t_used, t_limit, node_reason, cpus, gres = fields[:9]
                     used_s  = _parse_slurm_time(t_used)
                     limit_s = _parse_slurm_time(t_limit)
-                    gpus    = _parse_gpus_from_gres(gres)
+                    gpu_count, gpu_model = _parse_gpus_from_gres(gres)
+                    gpus    = gpu_count
                     progress = None
                     if state == "RUNNING" and used_s is not None and limit_s:
                         pct = min(100, int(100 * used_s / limit_s))

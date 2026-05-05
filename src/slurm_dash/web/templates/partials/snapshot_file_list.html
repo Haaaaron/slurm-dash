@@ -42,10 +42,72 @@
 
 {% if error %}
   <p class="text-xs text-red-400 p-3">{{ error }}</p>
-{% elif not tree %}
-  <p class="text-xs text-gray-600 italic p-3">No files in snapshot.</p>
 {% else %}
-  <ul class="py-1">
-    {{ render_nodes(tree, 0) }}
+  <ul class="py-1 space-y-0.5">
+    <!-- Submit Script (highest priority) -->
+    <li data-file-path="submit_script.sh"
+        data-auto-open="true"
+        class="flex items-center gap-1.5 py-0.5 text-xs font-mono cursor-pointer transition-colors text-yellow-400 hover:bg-yellow-950/40 hover:text-yellow-200"
+        style="padding-left: 10px; padding-right: 8px"
+        title="submit_script.sh">
+      <svg class="w-3 h-3 flex-shrink-0 text-yellow-500/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+      </svg>
+      <span class="truncate min-w-0">◆ submit_script.sh</span>
+      <span class="ml-auto flex-shrink-0 text-[9px] px-1 py-0.5 rounded bg-yellow-950 text-yellow-600 border border-yellow-900/50 whitespace-nowrap">captured</span>
+    </li>
+
+    <!-- SLURM Output file (always shown, highlighted in green) -->
+    {% if slurm_output %}
+    <li data-file-path="{{ slurm_output }}"
+        class="flex items-center gap-1.5 py-0.5 text-xs font-mono cursor-pointer transition-colors text-green-400 hover:bg-green-950/40 hover:text-green-200"
+        style="padding-left: 10px; padding-right: 8px"
+        title="{{ slurm_output }}">
+      <svg class="w-3 h-3 flex-shrink-0 text-green-500/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+      </svg>
+      <span class="truncate min-w-0">{{ slurm_output|basename }}</span>
+      <span class="ml-auto flex-shrink-0 text-[9px] px-1 py-0.5 rounded bg-green-950 text-green-600 border border-green-900/50 whitespace-nowrap">output</span>
+    </li>
+    {% endif %}
+
+    <!-- SLURM Error file (if defined, highlighted in red) -->
+    {% if slurm_error %}
+    <li data-file-path="{{ slurm_error }}"
+        class="flex items-center gap-1.5 py-0.5 text-xs font-mono cursor-pointer transition-colors text-red-400 hover:bg-red-950/40 hover:text-red-200"
+        style="padding-left: 10px; padding-right: 8px"
+        title="{{ slurm_error }}">
+      <svg class="w-3 h-3 flex-shrink-0 text-red-500/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+      </svg>
+      <span class="truncate min-w-0">{{ slurm_error|basename }}</span>
+      <span class="ml-auto flex-shrink-0 text-[9px] px-1 py-0.5 rounded bg-red-950 text-red-600 border border-red-900/50 whitespace-nowrap">error</span>
+    </li>
+    {% endif %}
+
+    <!-- Snapshot contents (collapsed dropdown) -->
+    {% if snapshot_tree %}
+    <li x-data="{ open: false }" class="select-none">
+      <div @click="open = !open"
+           class="flex items-center gap-1.5 py-0.5 text-xs font-mono text-gray-400 hover:text-gray-200 hover:bg-gray-800/40 cursor-pointer transition-colors"
+           style="padding-left: 10px; padding-right: 8px">
+        <svg :class="open ? 'rotate-90' : ''"
+             class="w-2.5 h-2.5 flex-shrink-0 text-gray-600 transition-transform"
+             fill="none" viewBox="0 0 6 10">
+          <path d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <svg class="w-3 h-3 flex-shrink-0 text-purple-500/60" fill="currentColor" viewBox="0 0 20 20">
+          <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
+        </svg>
+        <span class="truncate min-w-0">Snapshot</span>
+        <span class="ml-auto flex-shrink-0 text-[10px] text-gray-700">{{ snapshot_tree|length }} items</span>
+      </div>
+      <ul x-show="open">
+        {{ render_nodes(snapshot_tree, 1) }}
+      </ul>
+    </li>
+    {% else %}
+    <p class="text-xs text-gray-600 italic p-3">No snapshot contents.</p>
+    {% endif %}
   </ul>
 {% endif %}

@@ -2,9 +2,11 @@ import csv
 import io
 import shlex
 import textwrap
+import time
 
 from .config import load_config, get_db_connection
 from .remote_manager import run_ssh
+from .slurm_api import update_workdir_from_scontrol
 
 REMOTE_COLUMNS = [
     "job_id", "array_base_id", "array_task_id",
@@ -111,6 +113,23 @@ def sync_server(alias, ssh_string):
         print(f"Sync error for {alias}: {e}")
     finally:
         conn.close()
+
+    # Query scontrol for WorkDir only on running/pending jobs (not historical).
+    # This avoids expensive queries on completed jobs.
+    try:
+        conn = get_db_connection()
+        # Only query jobs without final_state (still running/pending)
+        active_jobs = conn.execute(
+            "SELECT job_id FROM jobs WHERE server_alias = ? AND final_state IS NULL LIMIT 10",
+            (alias,)
+        ).fetchall()
+        conn.close()
+
+        if active_jobs and ssh_string:
+            for (job_id,) in active_jobs:
+                update_workdir_from_scontrol(alias, job_id, ssh_string)
+    except Exception:
+        pass
 
 
 def sync_all():

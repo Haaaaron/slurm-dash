@@ -1,0 +1,23 @@
+<div class="flex gap-1.5 flex-wrap mb-2">
+  <span class="text-xs text-gray-500 self-center mr-1">Tags:</span>
+  {% if tags %}
+    {% for tag in tags %}
+    <button hx-get="/jobs/{{ alias }}?tag={{ tag }}"
+            hx-target="#jobs-table-{{ alias }}"
+            hx-swap="outerHTML"
+            class="px-2 py-0.5 rounded text-[10px] bg-indigo-950 text-indigo-300 hover:bg-indigo-900 transition-colors">
+      {{ tag }}
+    </button>
+    {% endfor %}
+  {% else %}
+    <span class="text-xs text-gray-600 italic">No tags yet</span>
+  {% endif %}
+  {% if active_tag %}
+  <button hx-get="/jobs/{{ alias }}"
+          hx-target="#jobs-table-{{ alias }}"
+          hx-swap="outerHTML"
+          class="px-2 py-0.5 rounded text-[10px] bg-gray-800 text-gray-400 hover:bg-gray-700 transition-colors">
+    ✕ Clear filter
+  </button>
+  {% endif %}
+</div>

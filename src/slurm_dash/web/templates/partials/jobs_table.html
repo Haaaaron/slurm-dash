@@ -1,8 +1,8 @@
 <div id="jobs-table-{{ alias }}"
      hx-get="/jobs/{{ alias }}"
-     hx-trigger="load, every 5m"
+     hx-trigger="load"
      hx-swap="outerHTML"
-     hx-indicator="#global-spinner">
+     x-data="{ selectedRows: new Set(), lastChecked: null }">
 
   <!-- Usage bar -->
   <div class="flex items-center gap-3 mb-3 text-sm">
@@ -10,7 +10,6 @@
       hx-get="/squeue/{{ alias }}"
       hx-target="#modal-slot"
       hx-swap="innerHTML"
-      hx-indicator="#global-spinner"
       class="flex items-center gap-3 px-3 py-1.5 rounded-lg bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
       {% if usage.running > 0 %}
         <span class="text-green-400 font-medium">{{ usage.running }} running</span>
@@ -30,14 +29,60 @@
 
     <!-- Sync button -->
     <button
-      hx-post="/sync/{{ alias }}"
-      hx-target="#jobs-table-{{ alias }}"
-      hx-swap="outerHTML"
-      hx-indicator="#global-spinner"
-      class="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-gray-700 text-gray-400 hover:text-gray-200 transition-colors text-xs">
-      <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+      @click="$el.disabled = true; fetch('/sync/{{ alias }}', {method: 'POST'}).then(() => location.reload()).catch(() => $el.disabled = false)"
+      class="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-gray-700 text-gray-400 hover:text-gray-200 transition-colors text-xs disabled:opacity-50">
+      <svg class="w-3.5 h-3.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
       Sync
     </button>
+
+    <!-- Tag selected button (shown when rows are selected) -->
+    <button
+      x-show="selectedRows.size > 0"
+      @click="tagName = prompt('Tag name:');
+              if(tagName && tagName.trim()) {
+                fetch('/jobs/{{ alias }}/tag-multiple', {
+                  method:'POST',
+                  headers:{'Content-Type':'application/json'},
+                  body: JSON.stringify({job_ids:[...selectedRows], tag_name:tagName})
+                }).then(() => location.reload());
+              }"
+      class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-950 hover:bg-indigo-900 border border-indigo-900 hover:border-indigo-800 text-indigo-400 hover:text-indigo-200 transition-colors text-xs">
+      <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.972 1.972 0 013 12V7a4 4 0 014-4z"/></svg>
+      Tag <span x-text="selectedRows.size"></span>
+    </button>
+
+    <!-- Delete selected button (shown when rows are selected) -->
+    <button
+      x-show="selectedRows.size > 0"
+      @click="if(selectedRows.size > 0 && confirm('Delete ' + selectedRows.size + ' job(s)?')) {
+        const jobs = Array.from(selectedRows);
+        fetch('/jobs/{{ alias }}/delete-multiple', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({job_ids: jobs})
+        }).then(() => location.reload());
+      }"
+      class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-950 hover:bg-red-900 border border-red-900 hover:border-red-800 text-red-400 hover:text-red-200 transition-colors text-xs">
+      <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+      Delete <span x-text="selectedRows.size"></span>
+    </button>
+  </div>
+
+  <!-- Tag filter bar -->
+  <div class="flex gap-1.5 flex-wrap mb-2">
+    <span class="text-xs text-gray-500 self-center mr-1">Tags:</span>
+    {% if tags %}
+      {% for tag in tags %}
+      <button hx-get="/jobs/{{ alias }}{% if tag != active_tag %}?tag={{ tag }}{% endif %}"
+              hx-target="#jobs-table-{{ alias }}"
+              hx-swap="innerHTML"
+              class="px-2 py-0.5 rounded text-[10px] font-medium {% if tag == active_tag %}bg-indigo-600 text-indigo-50 border border-indigo-500{% else %}bg-indigo-950 text-indigo-300 hover:bg-indigo-900 border border-indigo-900{% endif %} transition-colors">
+        {% if tag == active_tag %}✓ {{ tag }} (unset){% else %}{{ tag }} (set){% endif %}
+      </button>
+      {% endfor %}
+    {% else %}
+      <span class="text-xs text-gray-600 italic">No tags yet</span>
+    {% endif %}
   </div>
 
   <!-- Job table -->
@@ -46,29 +91,54 @@
     <table class="w-full text-xs">
       <thead>
         <tr class="bg-gray-900 border-b border-gray-800 text-gray-500 uppercase tracking-wider text-[10px]">
+          <th class="px-3 py-2.5 text-center font-medium w-8">
+            <input type="checkbox"
+                   @change="if($event.target.checked) { document.querySelectorAll('.job-row-{{ alias }} input[type=checkbox]').forEach(cb => {cb.checked = true; cb.dispatchEvent(new Event('change'))}); } else { selectedRows.clear(); document.querySelectorAll('.job-row-{{ alias }} input[type=checkbox]').forEach(cb => cb.checked = false); }"
+                   class="rounded border-gray-600 bg-gray-800 text-indigo-500 focus:ring-0 focus:ring-offset-0 w-4 h-4">
+          </th>
           <th class="px-3 py-2.5 text-left font-medium">Job ID</th>
-          <th class="px-3 py-2.5 text-left font-medium">Array</th>
+          <th class="px-3 py-2.5 text-left font-medium">Job Name</th>
           <th class="px-3 py-2.5 text-left font-medium">State</th>
           <th class="px-3 py-2.5 text-left font-medium">Submitted</th>
           <th class="px-3 py-2.5 text-left font-medium max-w-xs">Work Dir</th>
           <th class="px-3 py-2.5 text-left font-medium">CPUs</th>
           <th class="px-3 py-2.5 text-left font-medium">Req Mem</th>
-          <th class="px-3 py-2.5 text-left font-medium">Max RSS</th>
+          <th class="px-3 py-2.5 text-left font-medium">GPUs</th>
           <th class="px-3 py-2.5 text-left font-medium">Nodes</th>
           <th class="px-3 py-2.5 text-left font-medium">Git</th>
+          <th class="px-3 py-2.5 text-left font-medium">Tags</th>
           <th class="px-3 py-2.5 text-right font-medium">Actions</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-gray-800/60">
         {% for row in rows %}
         <tr id="row-{{ alias }}-{{ row.job_id }}"
-            class="hover:bg-gray-900/60 transition-colors group cursor-pointer"
+            class="job-row-{{ alias }} hover:bg-gray-900/60 transition-colors group cursor-pointer"
             hx-get="/jobs/{{ alias }}/{{ row.job_id }}/files"
             hx-target="#modal-slot"
-            hx-swap="innerHTML"
-            hx-indicator="#global-spinner">
-          <td class="px-3 py-2 font-mono text-indigo-300">{{ row.job_id }}</td>
-          <td class="px-3 py-2 font-mono text-gray-500">{{ row.array }}</td>
+            hx-swap="innerHTML">
+          <td class="px-3 py-2 text-center" onclick="event.stopPropagation()">
+            <input type="checkbox"
+                   @click="
+                     const el = $event.target;
+                     if(el.shiftKey && $data.lastChecked) {
+                       const allBoxes = [...document.querySelectorAll('.job-row-{{ alias }} input[type=checkbox]')];
+                       const startIdx = allBoxes.indexOf($data.lastChecked);
+                       const endIdx = allBoxes.indexOf(el);
+                       const [lo, hi] = [Math.min(startIdx, endIdx), Math.max(startIdx, endIdx)];
+                       allBoxes.slice(lo, hi+1).forEach(b => {
+                         b.checked = el.checked;
+                         b.dispatchEvent(new Event('change'));
+                       });
+                     }
+                     $data.lastChecked = el;
+                   "
+                   @change="if($event.target.checked) { selectedRows.add('{{ row.job_id }}'); } else { selectedRows.delete('{{ row.job_id }}'); }"
+                   onclick="event.stopPropagation()"
+                   class="rounded border-gray-600 bg-gray-800 text-indigo-500 focus:ring-0 focus:ring-offset-0 w-4 h-4 cursor-pointer">
+          </td>
+          <td class="px-3 py-2 font-mono text-indigo-300 cursor-pointer">{{ row.job_id }}</td>
+          <td class="px-3 py-2 text-gray-400">{{ row.job_name }}</td>
           <td class="px-3 py-2">
             {% if row.state %}
             <span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium {{ row.state_class }}">{{ row.state }}</span>
@@ -78,9 +148,14 @@
           <td class="px-3 py-2 font-mono text-gray-400 max-w-xs truncate" title="{{ row.work_dir }}">{{ row.work_dir }}</td>
           <td class="px-3 py-2 text-gray-400">{{ row.cpus }}</td>
           <td class="px-3 py-2 text-gray-400">{{ row.req_mem }}</td>
-          <td class="px-3 py-2 text-gray-400">{{ row.max_rss }}</td>
+          <td class="px-3 py-2 text-gray-400">{% if row.gpus %}{{ row.gpus }}{% if row.gpu_model %} <span class="text-gray-500">({{ row.gpu_model }})</span>{% endif %}{% endif %}</td>
           <td class="px-3 py-2 font-mono text-gray-500 truncate max-w-[8rem]" title="{{ row.node_list }}">{{ row.node_list }}</td>
           <td class="px-3 py-2 font-mono text-gray-600">{{ row.git_hash }}</td>
+          <td class="px-3 py-2">
+            {% for tag in row.tags %}
+            <span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-950 text-indigo-300 mr-1 mb-0.5">{{ tag }}</span>
+            {% endfor %}
+          </td>
           <td class="px-3 py-2 text-right" onclick="event.stopPropagation()">
             <button
               hx-delete="/jobs/{{ alias }}/{{ row.job_id }}"

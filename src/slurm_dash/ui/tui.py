@@ -11,7 +11,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button, DataTable, Footer, Header,
-    Label, RichLog, Switch, TabbedContent, TabPane, Tree,
+    Input, Label, RichLog, Switch, TabbedContent, TabPane, Tree,
 )
 
 _ENV_VAR_RE = re.compile(
@@ -47,7 +47,9 @@ def _is_terminal(state: str) -> bool:
     return state.split()[0].upper() in _TERMINAL_STATES
 
 from ..config import get_db_connection, load_config
-from ..jobs import delete_job
+from ..jobs import delete_job, add_tags
+from ..output_inferrer import get_slurm_outputs
+from ..remote_manager import run_ssh
 from ..output_inferrer import infer_outputs
 from ..output_probe import load_outputs, run_full_probe
 from ..remote_manager import run_ssh
@@ -212,13 +214,14 @@ class FilesModal(ModalScreen):
     MAX_PREVIEW_BYTES = 256 * 1024
 
     def __init__(self, alias: str, job_id: str, snapshot_path: str,
-                 submit_argv: str | None = None, work_dir: str | None = None,
-                 env_vars: str | None = None):
+                 submit_argv: str | None = None, submit_script: str | None = None,
+                 work_dir: str | None = None, env_vars: str | None = None):
         super().__init__()
         self.alias = alias
         self.job_id = job_id
         self.snapshot_path = snapshot_path
         self.submit_argv = submit_argv
+        self.submit_script = submit_script
         self.work_dir = work_dir
         self.env_vars_json = env_vars
         self._env_dict: dict[str, str] = {}
@@ -234,6 +237,8 @@ class FilesModal(ModalScreen):
         self._current_body: str = ""
         self._substitute_env: bool = False
         self._output_rows: list[dict] = []  # parallel to DataTable rows
+        self._slurm_output: str = ""
+        self._slurm_error: str = ""
 
     def _format_sbatch_cmd(self) -> str:
         if not self.submit_argv:
@@ -291,6 +296,18 @@ class FilesModal(ModalScreen):
             yield Button("Close", id="close")
 
     def on_mount(self) -> None:
+        # Extract SLURM output/error paths
+        if self.work_dir:
+            slurm_outputs = get_slurm_outputs(
+                job_id=self.job_id,
+                work_dir=self.work_dir,
+                submit_argv_json=self.submit_argv,
+                submit_script=self.submit_script,
+                env_vars_json=self.env_vars_json,
+            )
+            self._slurm_output = slurm_outputs.get("output", "")
+            self._slurm_error = slurm_outputs.get("error", "")
+
         self._load_files()
         table = self.query_one("#output-table", DataTable)
         table.add_columns("Kind", "Path", "Size", "Modified", "Exists", "Local")
@@ -324,6 +341,30 @@ class FilesModal(ModalScreen):
             dir_nodes: dict[str, object] = {}
             _submit_node = None
 
+            # Add key files at the top (highest priority)
+            # Submit script (from snapshot)
+            lbl = Text("◆ ", style="bold yellow")
+            lbl.append("submit_script.sh", style="bold yellow")
+            submit_node = tree.root.add_leaf(lbl, data="submit_script.sh")
+
+            # SLURM output file
+            if self._slurm_output:
+                out_name = self._slurm_output.split("/")[-1]
+                lbl = Text(out_name, style="bold green")
+                tree.root.add_leaf(lbl, data=self._slurm_output)
+
+            # SLURM error file
+            if self._slurm_error:
+                err_name = self._slurm_error.split("/")[-1]
+                lbl = Text(err_name, style="bold red")
+                tree.root.add_leaf(lbl, data=self._slurm_error)
+
+            # Add snapshot folder if there are files
+            if files and not any(f.startswith("(") for f in files):
+                snapshot_node = tree.root.add(Text("Snapshot", style="bold"), expand=False)
+            else:
+                snapshot_node = None
+
             for raw in files:
                 path = raw
                 if path.startswith("./"):
@@ -335,10 +376,14 @@ class FilesModal(ModalScreen):
                 if not clean:
                     continue
                 if clean.startswith("("):
-                    tree.root.add_leaf(Text(clean, style="red"), data="")
+                    if snapshot_node:
+                        snapshot_node.add_leaf(Text(clean, style="red"), data="")
+                    else:
+                        tree.root.add_leaf(Text(clean, style="red"), data="")
                     continue
+
                 parts = clean.split("/")
-                parent = tree.root
+                parent = snapshot_node if snapshot_node else tree.root
                 for depth in range(len(parts) - 1):
                     dir_key = "/".join(parts[: depth + 1])
                     if dir_key not in dir_nodes:
@@ -364,7 +409,15 @@ class FilesModal(ModalScreen):
                     if path == "submit_script.sh":
                         _submit_node = leaf
 
-            if _submit_node is not None:
+            # Auto-select submit script (either from top-level or from snapshot)
+            if submit_node is not None:
+                try:
+                    tree.select_node(submit_node)
+                    tree.scroll_to_node(submit_node)
+                except Exception:
+                    pass
+                self._fetch_file("submit_script.sh")
+            elif _submit_node is not None:
                 try:
                     tree.select_node(_submit_node)
                     tree.scroll_to_node(_submit_node)
@@ -629,6 +682,145 @@ _KIND_STYLES = {
 }
 
 
+class TagModal(ModalScreen):
+    """Modal to prompt for a tag name and apply it to selected jobs."""
+    DEFAULT_CSS = """
+    TagModal { align: center middle; }
+    TagModal > Vertical {
+        width: 50;
+        height: 10;
+        border: heavy $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    TagModal #buttons { height: 3; padding-top: 1; }
+    """
+
+    BINDINGS = [
+        ("escape", "dismiss", "Cancel"),
+        ("enter", "apply_tag", "Apply"),
+    ]
+
+    def __init__(self, job_ids: list[str], alias: str, app: App):
+        super().__init__()
+        self.job_ids = job_ids
+        self.alias = alias
+        self._app_ref = app
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label(f"Tag {len(self.job_ids)} job(s)"),
+            Input(id="tag-input", placeholder="Enter tag name..."),
+            Horizontal(
+                Button("Apply", id="apply-btn", variant="primary"),
+                Button("Cancel", id="cancel-btn"),
+                id="buttons",
+            ),
+        )
+
+    def on_mount(self) -> None:
+        self.query_one("#tag-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "apply-btn":
+            self.action_apply_tag()
+        elif event.button.id == "cancel-btn":
+            self.dismiss()
+
+    def action_apply_tag(self) -> None:
+        tag_input = self.query_one("#tag-input", Input)
+        tag_name = tag_input.value.strip()
+        if not tag_name:
+            self._app_ref.notify("Tag name cannot be empty.", severity="warning")
+            return
+        add_tags(self.alias, self.job_ids, tag_name)
+        self._app_ref.notify(f"Tagged {len(self.job_ids)} job(s) with '{tag_name}'.", severity="information")
+        self._app_ref._selected_jobs = set()
+        # Re-render the table
+        table = self._app_ref.tables.get(self.alias)
+        if table:
+            try:
+                status_map = get_live_status(self.alias, since=self._app_ref._oldest_submit_time(self.alias))
+            except Exception:
+                status_map = {}
+            self._app_ref._render_local(self.alias, table, status_map)
+        self.dismiss()
+
+
+class FilterTagModal(ModalScreen):
+    """Modal to prompt for a tag name to filter by."""
+    DEFAULT_CSS = """
+    FilterTagModal { align: center middle; }
+    FilterTagModal > Vertical {
+        width: 50;
+        height: 10;
+        border: heavy $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    FilterTagModal #buttons { height: 3; padding-top: 1; }
+    """
+
+    BINDINGS = [
+        ("escape", "dismiss", "Cancel"),
+        ("enter", "apply_filter", "Filter"),
+    ]
+
+    def __init__(self, alias: str, app: App):
+        super().__init__()
+        self.alias = alias
+        self._app_ref = app
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label("Filter by tag"),
+            Input(id="filter-input", placeholder="Enter tag name..."),
+            Horizontal(
+                Button("Filter", id="filter-btn", variant="primary"),
+                Button("Clear", id="clear-btn"),
+                Button("Cancel", id="cancel-btn"),
+                id="buttons",
+            ),
+        )
+
+    def on_mount(self) -> None:
+        self.query_one("#filter-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "filter-btn":
+            self.action_apply_filter()
+        elif event.button.id == "clear-btn":
+            self._app_ref._tag_filter = None
+            self._app_ref.notify("Cleared tag filter.", severity="information")
+            # Re-render all tables
+            for alias, table in self._app_ref.tables.items():
+                try:
+                    status_map = get_live_status(alias, since=self._app_ref._oldest_submit_time(alias))
+                except Exception:
+                    status_map = {}
+                self._app_ref._render_local(alias, table, status_map)
+            self.dismiss()
+        elif event.button.id == "cancel-btn":
+            self.dismiss()
+
+    def action_apply_filter(self) -> None:
+        filter_input = self.query_one("#filter-input", Input)
+        tag_name = filter_input.value.strip()
+        if not tag_name:
+            self._app_ref.notify("Tag name cannot be empty.", severity="warning")
+            return
+        self._app_ref._tag_filter = tag_name
+        self._app_ref.notify(f"Filtering by tag: {tag_name}", severity="information")
+        # Re-render all tables
+        for alias, table in self._app_ref.tables.items():
+            try:
+                status_map = get_live_status(alias, since=self._app_ref._oldest_submit_time(alias))
+            except Exception:
+                status_map = {}
+            self._app_ref._render_local(alias, table, status_map)
+        self.dismiss()
+
+
 class SqueueModal(ModalScreen):
     DEFAULT_CSS = """
     SqueueModal { align: center middle; }
@@ -735,7 +927,8 @@ class SqueueModal(ModalScreen):
             limit_s = _parse_slurm_time(r["time_limit"])
             time_text = Text(f"{r['time_used']} / {r['time_limit']}")
             bar_text = _render_progress(used_s, limit_s, r["state"])
-            gpus = _parse_gpus_from_gres(r["gres"]) or 0
+            gpu_count, gpu_model = _parse_gpus_from_gres(r["gres"])
+            gpus = gpu_count or 0
             state_style = {
                 "RUNNING": "green",
                 "PENDING": "yellow",
@@ -811,6 +1004,12 @@ class SlurmDashTUI(App):
         ("d", "delete_job", "Delete"),
         ("f", "show_files", "Files"),
         ("s", "show_squeue", "squeue"),
+        ("space", "toggle_select", "Select"),
+        ("a", "select_all", "Select All"),
+        ("u", "select_none", "Select None"),
+        ("shift+space", "range_select", "Range Select"),
+        ("t", "tag_jobs", "Tag"),
+        ("g", "filter_tag", "Filter Tag"),
         ("q", "quit", "Quit"),
     ]
 
@@ -828,6 +1027,9 @@ class SlurmDashTUI(App):
         ] | None = None
         self.tables: dict[str, DataTable] = {}
         self.usage_labels: dict[str, "UsageLabel"] = {}
+        self._selected_jobs: set[str] = set()
+        self._tag_filter: str | None = None
+        self._row_job_order: list[str] = []  # job IDs in table row order
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -903,15 +1105,16 @@ class SlurmDashTUI(App):
         dt.cursor_type = "row"
         dt.zebra_stripes = True
         dt.add_column("Job ID", width=12)
-        dt.add_column("Array", width=8)
+        dt.add_column("Job Name", width=20)
         dt.add_column("State", width=14)
         dt.add_column("Submit Time", width=20)
         dt.add_column("Work Dir", width=40)
         dt.add_column("CPUs", width=6)
         dt.add_column("Req Mem", width=10)
-        dt.add_column("Max RSS", width=10)
+        dt.add_column("GPUs", width=10)
         dt.add_column("Nodes", width=24)
         dt.add_column("Git Hash", width=10)
+        dt.add_column("Tags", width=20)
         return dt
 
     def on_mount(self) -> None:
@@ -930,18 +1133,33 @@ class SlurmDashTUI(App):
             usage.update(self._compute_usage_text(alias, status_map))
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT job_id, array_base_id, submit_time, work_dir, git_hash,
-                   snapshot_path, submit_argv, env_vars,
-                   final_state, final_cpus, final_req_mem, final_max_rss,
-                   final_gpus, final_node_list
-            FROM jobs
-            WHERE server_alias = ? AND is_deleted = 0
-            ORDER BY submit_time DESC
-            """,
-            (alias,),
-        )
+        if self._tag_filter:
+            cursor.execute(
+                """
+                SELECT j.job_id, j.array_base_id, j.submit_time, j.work_dir, j.git_hash,
+                       j.snapshot_path, j.submit_argv, j.env_vars,
+                       j.final_state, j.final_cpus, j.final_req_mem, j.final_max_rss,
+                       j.final_gpus, j.final_gpu_model, j.final_node_list
+                FROM jobs j
+                INNER JOIN tags t ON j.server_alias = t.server_alias AND j.job_id = t.job_id
+                WHERE j.server_alias = ? AND j.is_deleted = 0 AND t.tag_name = ?
+                ORDER BY j.submit_time DESC
+                """,
+                (alias, self._tag_filter),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT job_id, array_base_id, submit_time, work_dir, git_hash,
+                       snapshot_path, submit_argv, env_vars,
+                       final_state, final_cpus, final_req_mem, final_max_rss,
+                       final_gpus, final_gpu_model, final_node_list
+                FROM jobs
+                WHERE server_alias = ? AND is_deleted = 0
+                ORDER BY submit_time DESC
+                """,
+                (alias,),
+            )
         local_rows = cursor.fetchall()
         conn.close()
 
@@ -950,22 +1168,58 @@ class SlurmDashTUI(App):
         if status_map:
             self._finalize_terminal(alias, status_map, local_rows)
 
+        # Load tags for all jobs in batch (not N+1)
+        job_tags: dict[str, list[str]] = {}
+        if local_rows:
+            conn = get_db_connection()
+            try:
+                tag_rows = conn.execute(
+                    "SELECT job_id, tag_name FROM tags WHERE server_alias = ? ORDER BY job_id, tag_name",
+                    (alias,),
+                ).fetchall()
+                for job_id, tag_name in tag_rows:
+                    if job_id not in job_tags:
+                        job_tags[job_id] = []
+                    job_tags[job_id].append(tag_name)
+            finally:
+                conn.close()
+
+        # Track row order for range selection
+        self._row_job_order = [row[0] for row in local_rows]
+
         table.clear()
         for row in local_rows:
             job_id = row[0]
             final_state = row[8]
-            self.snapshot_map[job_id] = (alias, row[5], row[6], row[3], row[7])
+            self.snapshot_map[job_id] = (alias, row[5], row[6], None, row[3], row[7])
             dt_str = "N/A"
             if row[2]:
                 dt_str = datetime.fromtimestamp(row[2]).strftime('%Y-%m-%d %H:%M:%S')
+
+            # Extract job name from submit_argv
+            job_name = ""
+            submit_argv = []
+            if row[6]:
+                try:
+                    submit_argv = json.loads(row[6])
+                except Exception:
+                    pass
+            for i, arg in enumerate(submit_argv):
+                if arg in ("--job-name", "-J") and i + 1 < len(submit_argv):
+                    job_name = submit_argv[i + 1]
+                    break
+                elif isinstance(arg, str) and arg.startswith("--job-name="):
+                    job_name = arg.split("=", 1)[1]
+                    break
 
             if final_state:
                 # Frozen row: trust DB, ignore status_map.
                 state = final_state
                 cpus = row[9] or "N/A"
                 req_mem = row[10] or "N/A"
-                max_rss = row[11] or ""
-                node_list = row[13] or ""
+                gpus = row[12] or 0
+                gpu_model = row[13] or ""
+                node_list = row[14] or ""
             else:
                 s_info = (status_map or {}).get(job_id, {})
                 # status_map is None before the first refresh; otherwise a
@@ -975,26 +1229,41 @@ class SlurmDashTUI(App):
                 state = s_info.get("state", default_state)
                 cpus = s_info.get("cpus", "N/A")
                 req_mem = s_info.get("req_mem", "N/A")
-                max_rss = s_info.get("max_rss", "")
+                gpus = s_info.get("gpus") or 0
+                gpu_model = s_info.get("gpu_model") or ""
                 node_list = s_info.get("node_list", "") or ""
 
+            gpu_str = ""
+            if gpus:
+                gpu_str = str(gpus)
+                if gpu_model:
+                    gpu_str += f" ({gpu_model})"
+
+            tags_str = ", ".join(job_tags.get(job_id, []))
+
+            # Mark selected jobs with reverse video
+            job_id_display = job_id or "N/A"
+            if job_id in self._selected_jobs:
+                job_id_display = f"[reverse]{job_id_display}[/reverse]"
+
             table.add_row(
-                job_id or "N/A",
-                row[1] or "N/A",
+                job_id_display,
+                job_name,
                 state,
                 dt_str,
                 row[3] or "N/A",
                 cpus,
                 req_mem,
-                max_rss,
+                gpu_str,
                 node_list,
                 (row[4] or "N/A")[:7],
+                tags_str,
             )
         table.refresh(layout=True)
 
     def _finalize_terminal(self, alias: str, status_map: dict, local_rows) -> None:
-        # local_rows: tuples whose [0] is job_id and [8] is final_state.
-        already_final = {r[0] for r in local_rows if r[8]}
+        # local_rows: tuples whose [0] is job_id and [9] is final_state.
+        already_final = {r[0] for r in local_rows if r[9]}
         updates = []
         for job_id, info in status_map.items():
             if job_id in already_final:
@@ -1090,8 +1359,8 @@ class SlurmDashTUI(App):
         if self.selected_job is None:
             self.notify("Select a job first.", severity="warning")
             return
-        alias, job_id, snapshot, argv, work_dir, env_vars = self.selected_job
-        self.push_screen(FilesModal(alias, job_id, snapshot, argv, work_dir, env_vars))
+        alias, job_id, snapshot, argv, script, work_dir, env_vars = self.selected_job
+        self.push_screen(FilesModal(alias, job_id, snapshot, argv, script, work_dir, env_vars))
 
     def _active_alias(self) -> str | None:
         if len(self.tables) == 1:
@@ -1120,6 +1389,110 @@ class SlurmDashTUI(App):
         job_id = self.selected_job[1]
         self._do_delete(alias, job_id)
 
+    def action_toggle_select(self) -> None:
+        if self.selected_job is None:
+            self.notify("Select a job first.", severity="warning")
+            return
+        job_id = self.selected_job[1]
+        if job_id in self._selected_jobs:
+            self._selected_jobs.discard(job_id)
+            self.notify(f"Deselected {job_id}", severity="information")
+        else:
+            self._selected_jobs.add(job_id)
+            self.notify(f"Selected {job_id} ({len(self._selected_jobs)} total)", severity="information")
+        # Re-render to show selection
+        alias = self.selected_job[0]
+        table = self.tables.get(alias)
+        if table is not None:
+            try:
+                status_map = get_live_status(alias, since=self._oldest_submit_time(alias))
+            except Exception:
+                status_map = {}
+            self._render_local(alias, table, status_map)
+
+    def action_select_all(self) -> None:
+        if not self._row_job_order:
+            self.notify("No jobs to select.", severity="warning")
+            return
+        self._selected_jobs = set(self._row_job_order)
+        self.notify(f"Selected {len(self._selected_jobs)} job(s).", severity="information")
+        alias = self._active_alias()
+        if alias:
+            table = self.tables.get(alias)
+            if table is not None:
+                try:
+                    status_map = get_live_status(alias, since=self._oldest_submit_time(alias))
+                except Exception:
+                    status_map = {}
+                self._render_local(alias, table, status_map)
+
+    def action_select_none(self) -> None:
+        if not self._selected_jobs:
+            self.notify("No jobs selected.", severity="warning")
+            return
+        self._selected_jobs.clear()
+        self.notify("Deselected all jobs.", severity="information")
+        alias = self._active_alias()
+        if alias:
+            table = self.tables.get(alias)
+            if table is not None:
+                try:
+                    status_map = get_live_status(alias, since=self._oldest_submit_time(alias))
+                except Exception:
+                    status_map = {}
+                self._render_local(alias, table, status_map)
+
+    def action_range_select(self) -> None:
+        if self.selected_job is None:
+            self.notify("Select a job first.", severity="warning")
+            return
+        if not self._row_job_order:
+            self.notify("No jobs in table.", severity="warning")
+            return
+        current_job = self.selected_job[1]
+        if current_job not in self._row_job_order:
+            self.notify("Current job not in view.", severity="warning")
+            return
+        # Find range from any selected job to current job
+        if not self._selected_jobs:
+            self._selected_jobs.add(current_job)
+            self.notify(f"Range start set at {current_job}.", severity="information")
+            return
+        # Find the min and max indices of selected jobs and current job
+        indices = [self._row_job_order.index(jid) for jid in self._selected_jobs if jid in self._row_job_order]
+        current_idx = self._row_job_order.index(current_job)
+        indices.append(current_idx)
+        min_idx, max_idx = min(indices), max(indices)
+        # Select all jobs in range
+        self._selected_jobs = set(self._row_job_order[min_idx:max_idx + 1])
+        self.notify(f"Selected {len(self._selected_jobs)} job(s) in range.", severity="information")
+        # Re-render to show selection
+        alias = self.selected_job[0]
+        table = self.tables.get(alias)
+        if table is not None:
+            try:
+                status_map = get_live_status(alias, since=self._oldest_submit_time(alias))
+            except Exception:
+                status_map = {}
+            self._render_local(alias, table, status_map)
+
+    def action_tag_jobs(self) -> None:
+        if not self._selected_jobs:
+            self.notify("Select jobs first (Space key).", severity="warning")
+            return
+        alias = self._active_alias()
+        if not alias:
+            self.notify("No active server.", severity="warning")
+            return
+        self.push_screen(TagModal(sorted(self._selected_jobs), alias, self))
+
+    def action_filter_tag(self) -> None:
+        alias = self._active_alias()
+        if not alias:
+            self.notify("No active server.", severity="warning")
+            return
+        self.push_screen(FilterTagModal(alias, self))
+
     @work(thread=True)
     def _do_delete(self, alias: str, job_id: str) -> None:
         ok, msg = delete_job(alias, job_id)
@@ -1136,12 +1509,12 @@ class SlurmDashTUI(App):
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         job_id_cell = event.data_table.get_cell_at((event.cursor_row, 0))
         if job_id_cell and str(job_id_cell) in self.snapshot_map:
-            alias, snapshot_path, argv, work_dir, env_vars = self.snapshot_map[str(job_id_cell)]
+            alias, snapshot_path, argv, script, work_dir, env_vars = self.snapshot_map[str(job_id_cell)]
             self.selected_job = (
-                alias, str(job_id_cell), snapshot_path or "", argv, work_dir, env_vars,
+                alias, str(job_id_cell), snapshot_path or "", argv, script, work_dir, env_vars,
             )
             self.push_screen(FilesModal(
-                alias, str(job_id_cell), snapshot_path or "", argv, work_dir, env_vars,
+                alias, str(job_id_cell), snapshot_path or "", argv, script, work_dir, env_vars,
             ))
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
@@ -1151,8 +1524,8 @@ class SlurmDashTUI(App):
             return
         key = str(job_id_cell) if job_id_cell else None
         if key and key in self.snapshot_map:
-            alias, snapshot_path, argv, work_dir, env_vars = self.snapshot_map[key]
-            self.selected_job = (alias, key, snapshot_path or "", argv, work_dir, env_vars)
+            alias, snapshot_path, argv, script, work_dir, env_vars = self.snapshot_map[key]
+            self.selected_job = (alias, key, snapshot_path or "", argv, script, work_dir, env_vars)
 
 
 def run_tui():

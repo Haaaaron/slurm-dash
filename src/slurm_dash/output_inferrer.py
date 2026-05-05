@@ -132,6 +132,69 @@ def _abs_path(path: str, work_dir: str) -> str:
     return path
 
 
+def get_slurm_outputs(
+    *,
+    job_id: str,
+    work_dir: str,
+    submit_argv_json: str | None,
+    submit_script: str | None,
+    env_vars_json: str | None,
+    job_name: str = "",
+    user: str = "",
+) -> dict:
+    """Return {output_path: str, error_path: str} for SLURM-defined outputs only.
+
+    These are the definite outputs from --output / --error directives (or defaults).
+    Paths are absolute against work_dir. Returns paths even if they don't exist.
+    """
+    try:
+        argv = json.loads(submit_argv_json) if submit_argv_json else []
+    except (TypeError, ValueError):
+        argv = []
+    try:
+        env = json.loads(env_vars_json) if env_vars_json else {}
+    except (TypeError, ValueError):
+        env = {}
+
+    script_text = submit_script or ""
+    user = user or env.get("USER", "")
+
+    # Extract job name (used for %x expansion)
+    if not job_name:
+        job_name = (
+            _argv_get(argv, "--job-name", "-J")
+            or (_SBATCH_JOBNAME_RE.search(script_text).group(1)
+                if _SBATCH_JOBNAME_RE.search(script_text) else "")
+            or "slurm"
+        )
+
+    def _expand(pat: str) -> str:
+        s = _expand_slurm_pattern(pat, job_id=job_id, job_name=job_name, user=user)
+        s = _expand_env(s, env)
+        return _abs_path(s, work_dir)
+
+    # Extract --output (required, defaults to slurm-%j.out)
+    out_pat = _argv_get(argv, "--output", "-o")
+    if out_pat is None:
+        m = _SBATCH_OUTPUT_RE.search(script_text)
+        out_pat = m.group(1) if m else None
+    if out_pat is None:
+        out_pat = "slurm-%j.out"
+    output_path = _expand(out_pat)
+
+    # Extract --error (optional)
+    err_pat = _argv_get(argv, "--error", "-e")
+    if err_pat is None:
+        m = _SBATCH_ERROR_RE.search(script_text)
+        err_pat = m.group(1) if m else None
+    error_path = _expand(err_pat) if err_pat else ""
+
+    return {
+        "output": output_path,
+        "error": error_path,
+    }
+
+
 def infer_outputs(
     *,
     job_id: str,

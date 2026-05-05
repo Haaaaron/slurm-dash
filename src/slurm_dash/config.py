@@ -53,6 +53,7 @@ def _init_db():
             final_req_mem TEXT,
             final_max_rss TEXT,
             final_gpus INTEGER,
+            final_gpu_model TEXT,
             final_node_list TEXT,
             output_probed_at REAL,
             PRIMARY KEY (server_alias, job_id)
@@ -85,7 +86,8 @@ def _init_db():
                       ("env_vars", "TEXT"),
                       ("final_state", "TEXT"), ("final_cpus", "TEXT"),
                       ("final_req_mem", "TEXT"), ("final_max_rss", "TEXT"),
-                      ("final_gpus", "INTEGER"), ("final_node_list", "TEXT"),
+                      ("final_gpus", "INTEGER"), ("final_gpu_model", "TEXT"),
+                      ("final_node_list", "TEXT"),
                       ("output_probed_at", "REAL")):
         try:
             cursor.execute(f"ALTER TABLE jobs ADD COLUMN {col} {decl}")
