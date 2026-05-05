@@ -5,3 +5,4 @@ __pycache__/
 src/*.egg-info/
 build/
 slurm-dash-env/
+daemon/target/
