@@ -176,7 +176,7 @@ pub async fn get_live_status(
     let since_dt = chrono::Local
         .timestamp_opt(since_secs, 0)
         .single()
-        .unwrap_or_else(|| chrono::Local::now());
+        .unwrap_or_else(chrono::Local::now);
     let since_str = since_dt.format("%Y-%m-%d").to_string();
 
     let cmd = format!(

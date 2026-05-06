@@ -1,8 +1,7 @@
 //! Remote server setup: add, remove, and auto-install logic.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::Context;
 use base64::Engine;
-use std::path::Path;
 use std::time::Duration;
 
 use crate::config;
@@ -15,7 +14,6 @@ const INIT_DB_PY: &str = include_str!("../assets/init_db.py");
 const INJECT_INTERCEPTOR_PY: &str = include_str!("../assets/inject_interceptor.py");
 
 pub async fn add_target(ssh_string: &str, alias: &str) -> Result<()> {
-    let host = ssh_string.split('@').last().unwrap_or(ssh_string);
     tracing::info!("adding target {alias} ({ssh_string})");
 
     run_ssh(
@@ -91,13 +89,7 @@ pub async fn ensure_installed(ssh_string: &str, alias: &str) -> Result<bool> {
     let result = run_ssh(ssh_string, check_cmd, Duration::from_secs(10))
         .await
         .ok()
-        .and_then(|r| {
-            if r.success && r.stdout.trim() == "ok" {
-                Some(true)
-            } else {
-                Some(false)
-            }
-        })
+        .map(|r| r.success && r.stdout.trim() == "ok")
         .unwrap_or(false);
 
     if result {

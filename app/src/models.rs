@@ -6,16 +6,19 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default)]
 pub struct JobRow {
     pub job_id: String,
+    #[allow(dead_code)]
     pub array_base_id: Option<String>,
     pub submit_time: Option<f64>,
     pub work_dir: Option<String>,
     pub git_hash: Option<String>,
     pub snapshot_path: Option<String>,
     pub submit_argv: Option<String>,
+    #[allow(dead_code)]
     pub env_vars: Option<String>,
     pub final_state: Option<String>,
     pub final_cpus: Option<String>,
     pub final_req_mem: Option<String>,
+    #[allow(dead_code)]
     pub final_max_rss: Option<String>,
     pub final_gpus: Option<i64>,
     pub final_gpu_model: Option<String>,

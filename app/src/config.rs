@@ -12,6 +12,7 @@ const APP_NAME: &str = "slurm-dash";
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct General {
     #[serde(default)]
+    #[allow(dead_code)]
     pub max_download_mb: Option<u64>,
 }
 
@@ -19,14 +20,17 @@ pub struct General {
 pub struct Server {
     pub ssh_string: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub sync_on_startup: bool,
     #[serde(default)]
+    #[allow(dead_code)]
     pub alias: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
+    #[allow(dead_code)]
     pub general: General,
     #[serde(default)]
     pub servers: BTreeMap<String, Server>,

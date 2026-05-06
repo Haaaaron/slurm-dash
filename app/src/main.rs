@@ -157,7 +157,7 @@ async fn cmd_serve(host: String, port: u16, no_sync: bool) -> Result<()> {
 }
 
 async fn cmd_add(ssh_string: &str, alias: Option<String>, paths: &Paths) -> Result<()> {
-    let alias = alias.unwrap_or_else(|| ssh_string.split('@').last().unwrap_or("cluster").to_string());
+    let alias = alias.unwrap_or_else(|| ssh_string.split('@').next_back().unwrap_or("cluster").to_string());
 
     println!("Adding cluster {}...", alias);
     setup::add_target(ssh_string, &alias)

@@ -130,7 +130,7 @@ pub fn build_file_tree(paths: &[String]) -> Vec<TreeNode> {
     files.sort_by_key(|k| nodes[k.as_str()].name.to_lowercase());
 
     dirs.into_iter()
-        .chain(files.into_iter())
+        .chain(files)
         .map(|k| make_node(&nodes, k.as_str()))
         .collect()
 }
