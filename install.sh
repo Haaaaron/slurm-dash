@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 
 # Install slurm-dash binary.
 # Usage: ./install.sh [nightly]
@@ -14,7 +14,7 @@ mkdir -p "$BIN_DIR"
 
 # Try to find script directory for local builds (works when directly executed)
 SCRIPT_DIR=""
-if [[ -n "${0}" && "${0}" != "-bash" ]]; then
+if [[ -n "${0}" && "${0}" != "-bash" && "${0}" != "bash" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${0}")/.." 2>/dev/null && pwd)" || SCRIPT_DIR=""
 fi
 
