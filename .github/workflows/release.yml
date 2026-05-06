@@ -56,7 +56,7 @@ jobs:
         run: cross build --release --target ${{ matrix.target }} --manifest-path app/Cargo.toml
 
       - name: Build with cargo
-        if: !matrix.use_cross
+        if: ${{ !matrix.use_cross }}
         run: cargo build --release --target ${{ matrix.target }} --manifest-path app/Cargo.toml
 
       - name: Prepare artifact
