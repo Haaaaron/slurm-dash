@@ -17,10 +17,16 @@ Slurm-Dash uses a three-layer architecture:
 Download the prebuilt binary for your OS and architecture:
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/haaaaron/slurm-dash/main/install.sh | bash
+curl -LsSf https://raw.githubusercontent.com/haaaaron/slurm-dash/main/install.sh | bash -s
 ```
 
 This detects your OS and architecture, downloads the appropriate binary from the latest GitHub release, and installs it to `~/.local/bin/slurm-dash`.
+
+To install the latest nightly build instead:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/haaaaron/slurm-dash/main/install.sh | bash -s nightly
+```
 
 After install, make sure `~/.local/bin` is on your `PATH`:
 
