@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use std::io::Read;
 use std::net::TcpStream;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -25,12 +24,8 @@ pub async fn wait_for_server(port: u16, timeout: Duration) -> Result<()> {
     let addr = format!("127.0.0.1:{}", port);
 
     loop {
-        if let Ok(mut stream) = TcpStream::connect(&addr) {
-            stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
-            let mut buf = [0u8; 1];
-            if stream.read_exact(&mut buf).is_ok() || stream.read(&mut buf).is_ok() {
-                return Ok(());
-            }
+        if TcpStream::connect(&addr).is_ok() {
+            return Ok(());
         }
 
         if start.elapsed() > timeout {

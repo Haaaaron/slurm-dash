@@ -124,7 +124,7 @@ async fn cmd_default(paths: &Paths) -> Result<()> {
     PidFile::write(&pidfile_path, child_pid).ok();
 
     tracing::info!("waiting for server to start...");
-    launcher::wait_for_server(port, Duration::from_secs(5)).await?;
+    launcher::wait_for_server(port, Duration::from_secs(10)).await?;
 
     launcher::open_browser(port)?;
     Ok(())
