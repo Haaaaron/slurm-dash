@@ -17,6 +17,7 @@ pub enum Event {
 }
 
 pub struct AppState {
+    #[allow(dead_code)]
     pub paths: Paths,
     pub config: Config,
     pub db: Db,

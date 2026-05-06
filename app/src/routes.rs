@@ -182,6 +182,7 @@ async fn delete_tag_route(
 #[derive(Debug)]
 struct JobMeta {
     submit_argv: Option<String>,
+    #[allow(dead_code)]
     submit_script: Option<String>,
     work_dir: Option<String>,
     snapshot_path: Option<String>,

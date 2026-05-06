@@ -6,6 +6,7 @@ pub struct PidFile {
 }
 
 impl PidFile {
+    #[allow(dead_code)]
     pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
@@ -43,6 +44,7 @@ impl PidFile {
             .unwrap_or(false)
     }
 
+    #[allow(dead_code)]
     pub fn remove(&self) -> std::io::Result<()> {
         std::fs::remove_file(&self.path)
     }

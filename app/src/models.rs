@@ -53,7 +53,9 @@ pub struct DisplayRow {
     pub gpus: i64,
     pub gpu_model: String,
     pub node_list: String,
+    #[allow(dead_code)]
     pub snapshot_path: String,
+    #[allow(dead_code)]
     pub submit_cmd: String,
     pub tags: Vec<String>,
 }

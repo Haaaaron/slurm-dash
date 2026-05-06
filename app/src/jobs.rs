@@ -197,8 +197,7 @@ pub fn prepare_rows(
 }
 
 fn extract_job_name(argv: &[String]) -> String {
-    let mut iter = argv.iter().enumerate();
-    while let Some((i, arg)) = iter.next() {
+    for (i, arg) in argv.iter().enumerate() {
         if arg == "--job-name" || arg == "-J" {
             if let Some(next) = argv.get(i + 1) {
                 return next.clone();
@@ -219,8 +218,10 @@ fn shell_join(args: &[String]) -> String {
 }
 
 pub fn compute_usage(rows: &[DisplayRow]) -> Usage {
-    let mut u = Usage::default();
-    u.total = rows.len() as u64;
+    let mut u = Usage {
+        total: rows.len() as u64,
+        ..Default::default()
+    };
     for r in rows {
         match r.state.as_str() {
             "RUNNING" => {

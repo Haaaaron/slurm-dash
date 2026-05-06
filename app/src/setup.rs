@@ -9,6 +9,7 @@ use crate::db::Db;
 use crate::ssh::run_ssh;
 
 const CAPTURE_PY: &[u8] = include_bytes!("../assets/capture.py");
+#[allow(dead_code)]
 const SBATCH_WRAPPER: &str = include_str!("../assets/sbatch_wrapper.sh.tmpl");
 const INIT_DB_PY: &str = include_str!("../assets/init_db.py");
 const INJECT_INTERCEPTOR_PY: &str = include_str!("../assets/inject_interceptor.py");
