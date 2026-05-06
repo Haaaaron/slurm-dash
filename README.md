@@ -39,6 +39,16 @@ Supported platforms:
 - macOS (x86_64, ARM64)
 - Windows (x86_64)
 
+### Uninstall
+
+To uninstall:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/haaaaron/slurm-dash/main/uninstall.sh | bash -s
+```
+
+This stops the daemon, removes the binary, and optionally removes local configuration and database.
+
 ## Setup
 
 Initialize a config template:
