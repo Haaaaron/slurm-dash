@@ -249,3 +249,10 @@ pub fn finalize_terminal(
     tx.commit()?;
     Ok(())
 }
+
+pub fn purge_alias(conn: &Connection, alias: &str) -> Result<usize> {
+    conn.execute("DELETE FROM outputs WHERE server_alias = ?", params![alias])?;
+    conn.execute("DELETE FROM tags WHERE server_alias = ?", params![alias])?;
+    let count = conn.execute("DELETE FROM jobs WHERE server_alias = ?", params![alias])?;
+    Ok(count)
+}

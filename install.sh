@@ -1,29 +1,93 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# If run from inside the repo directory, install from local path (dev/testing).
-# Otherwise install from GitHub via SSH (requires SSH key for github.com).
+# Install slurm-dash binary.
+# If run from inside the repo (has Cargo.toml nearby), build from source.
+# Otherwise download from GitHub releases.
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$SCRIPT_DIR/pyproject.toml" ]]; then
-    INSTALL_SRC="$SCRIPT_DIR"
-else
-    INSTALL_SRC="git+ssh://git@github.com/haaaaron/slurm-dash"
-fi
+BIN_DIR="$HOME/.local/bin"
+BIN_NAME="slurm-dash"
 
-if ! command -v uv &>/dev/null; then
-    echo "Installing uv..."
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.local/bin:$PATH"
-fi
+mkdir -p "$BIN_DIR"
 
-echo "Installing slurm-dash from: $INSTALL_SRC"
-uv tool install "$INSTALL_SRC" --reinstall
-
-UV_BIN="$HOME/.local/bin"
-if [[ ":$PATH:" != *":$UV_BIN:"* ]]; then
+# Check if we're in the repo directory
+if [[ -f "$SCRIPT_DIR/app/Cargo.toml" ]]; then
+    echo "Building slurm-dash from local source..."
+    cargo build --release --manifest-path "$SCRIPT_DIR/app/Cargo.toml"
+    cp "$SCRIPT_DIR/app/target/release/slurm-dash" "$BIN_DIR/slurm-dash"
+    echo "✓ slurm-dash installed from local build!"
     echo ""
-    echo "slurm-dash is installed but not yet on PATH. Add to your shell rc:"
-    echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+    echo "To get started:"
+    echo "  slurm-dash init-config  # Create config template"
+    echo "  slurm-dash add user@cluster --alias mycluster"
+    echo "  slurm-dash             # Start the daemon and open the web UI"
+    exit 0
 fi
 
-echo "Done! Verify with: slurm-dash --version"
+# Download from GitHub releases
+REPO="haaaaron/slurm-dash"
+TEMP_DIR=$(mktemp -d)
+trap "rm -rf $TEMP_DIR" EXIT
+
+# Detect OS and architecture
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m)
+
+case "$OS" in
+    linux)
+        OS_NAME="linux"
+        case "$ARCH" in
+            x86_64) ARCH_NAME="x86_64" ;;
+            aarch64 | arm64) ARCH_NAME="aarch64" ;;
+            *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+        esac
+        ;;
+    darwin)
+        OS_NAME="darwin"
+        case "$ARCH" in
+            x86_64) ARCH_NAME="x86_64" ;;
+            arm64) ARCH_NAME="arm64" ;;
+            *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+        esac
+        ;;
+    *)
+        echo "Unsupported OS: $OS"
+        exit 1
+        ;;
+esac
+
+ARTIFACT_NAME="slurm-dash-${OS_NAME}-${ARCH_NAME}"
+if [ "$OS_NAME" = "windows" ]; then
+    ARTIFACT_NAME="${ARTIFACT_NAME}.exe"
+fi
+
+# Get the latest release download URL
+RELEASE_URL="https://api.github.com/repos/$REPO/releases/latest"
+DOWNLOAD_URL=$(curl -s "$RELEASE_URL" | grep "browser_download_url.*$ARTIFACT_NAME" | cut -d'"' -f4 | head -1)
+
+if [ -z "$DOWNLOAD_URL" ]; then
+    echo "Failed to find binary for ${OS_NAME}-${ARCH_NAME}"
+    exit 1
+fi
+
+echo "Downloading $ARTIFACT_NAME from $DOWNLOAD_URL..."
+curl -LsSf "$DOWNLOAD_URL" -o "$TEMP_DIR/$BIN_NAME"
+chmod +x "$TEMP_DIR/$BIN_NAME"
+mv "$TEMP_DIR/$BIN_NAME" "$BIN_DIR/$BIN_NAME"
+
+if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+    echo ""
+    echo "✓ slurm-dash installed to: $BIN_DIR/$BIN_NAME"
+    echo ""
+    echo "To use it, add to your shell rc:"
+    echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+else
+    echo "✓ slurm-dash installed successfully!"
+fi
+
+echo ""
+echo "To get started:"
+echo "  slurm-dash init-config  # Create config template"
+echo "  slurm-dash add user@cluster --alias mycluster"
+echo "  slurm-dash             # Start the daemon and open the web UI"

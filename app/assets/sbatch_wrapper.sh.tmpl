@@ -1,0 +1,26 @@
+#!/bin/bash
+export SLURM_TRACKER_MAX_MB="${SLURM_TRACKER_MAX_MB:-10}"
+stage=""
+# Refuse to snapshot $HOME or filesystem roots — a full copy there hangs.
+case "$PWD" in
+    "$HOME"|"$HOME/"|/|"") ;;
+    *)
+        mkdir -p "$HOME/.slurm_tracker/staging" 2>/dev/null
+        stage=$(mktemp -d "$HOME/.slurm_tracker/staging/XXXXXX" 2>/dev/null) || stage=""
+        if [ -n "$stage" ]; then
+            cp --reflink=always -a "$PWD"/. "$stage"/ 2>/dev/null \
+                || cp -al "$PWD"/. "$stage"/ 2>/dev/null \
+                || { rm -rf "$stage"; stage=""; }
+        fi
+        ;;
+esac
+_output=$(__REAL_SBATCH__ "$@")
+_rc=$?
+echo "$_output"
+_job_id=$(echo "$_output" | grep -oE '[0-9]+' | tail -n 1)
+if [ -n "$_job_id" ]; then
+    ~/.slurm_tracker/capture.py "$_job_id" "$stage" "$PWD" "$@" >/dev/null 2>&1 &
+elif [ -n "$stage" ]; then
+    rm -rf "$stage"
+fi
+exit $_rc

@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+            artifact_name: slurm-dash-linux-x86_64
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+            artifact_name: slurm-dash-linux-aarch64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            use_cross: false
+            artifact_name: slurm-dash-darwin-x86_64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_cross: false
+            artifact_name: slurm-dash-darwin-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            use_cross: false
+            artifact_name: slurm-dash-windows-x86_64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross
+
+      - name: Build with cross
+        if: matrix.use_cross
+        run: cross build --release --target ${{ matrix.target }} --manifest-path app/Cargo.toml
+
+      - name: Build with cargo
+        if: !matrix.use_cross
+        run: cargo build --release --target ${{ matrix.target }} --manifest-path app/Cargo.toml
+
+      - name: Prepare artifact
+        run: |
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            cp app/target/${{ matrix.target }}/release/slurm-dash.exe ${{ matrix.artifact_name }}
+          else
+            cp app/target/${{ matrix.target }}/release/slurm-dash ${{ matrix.artifact_name }}
+          fi
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release_artifacts
+          find artifacts -type f -name "slurm-dash*" -exec mv {} release_artifacts/ \;
+
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: release_artifacts/*
+          draft: false
+          prerelease: false

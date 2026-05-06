@@ -27,8 +27,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn initialize() -> Result<Self> {
-        let paths = Paths::resolve()?;
+    pub async fn initialize(paths: &Paths) -> Result<Self> {
         std::fs::create_dir_all(&paths.config_dir).ok();
         std::fs::create_dir_all(&paths.data_dir).ok();
         std::fs::create_dir_all(&paths.cache_dir).ok();
@@ -36,7 +35,7 @@ impl AppState {
         let db = Db::open(&paths.db_path).await?;
         let (tx, _) = broadcast::channel(64);
         Ok(Self {
-            paths,
+            paths: paths.clone(),
             config,
             db,
             live: RwLock::new(Default::default()),
@@ -59,17 +58,24 @@ impl AppState {
 /// Spawn the background sync + live status poll loop.
 ///
 /// On each tick:
-///   - For each alias with a configured ssh_string, run sync_server.
+///   - For each alias with a configured ssh_string, ensure it's installed (auto-install if needed).
+///   - Run sync_server.
 ///   - Fetch get_live_status for that alias and store it.
 ///   - Finalize any newly-terminal jobs in the DB.
 ///   - Broadcast a JobsUpdated event so connected SSE clients re-fetch.
-pub fn spawn_background_loop(state: Arc<AppState>) {
+pub async fn spawn_background_loop(state: Arc<AppState>, _paths: &Paths) -> Result<()> {
     tokio::spawn(async move {
         // Initial small delay so the server is reachable before first SSH calls.
         tokio::time::sleep(Duration::from_secs(1)).await;
         loop {
             for alias in state.server_aliases() {
                 if let Some(ssh_string) = state.ssh_for(&alias) {
+                    // Auto-install interceptor if not yet done.
+                    if let Err(e) = crate::setup::ensure_installed(&ssh_string, &alias).await {
+                        tracing::warn!(alias, error = %e, "auto-install failed");
+                        continue;
+                    }
+
                     // Sync new rows from the remote DB.
                     if let Err(e) = crate::sync::sync_server(&state.db, &alias, &ssh_string).await {
                         tracing::warn!(alias, error = %e, "sync_server failed");
@@ -111,4 +117,5 @@ pub fn spawn_background_loop(state: Arc<AppState>) {
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
     });
+    Ok(())
 }

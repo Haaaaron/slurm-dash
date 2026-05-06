@@ -14,11 +14,13 @@ Slurm-Dash uses a three-layer architecture:
 
 ## Installation
 
+Download the prebuilt binary for your OS and architecture:
+
 ```bash
 curl -LsSf https://raw.githubusercontent.com/haaaaron/slurm-dash/main/install.sh | bash
 ```
 
-This installs [uv](https://github.com/astral-sh/uv) if it is not already present, then uses it to install slurm-dash into an isolated tool environment. `uv` can bootstrap Python itself, so there are no external dependencies.
+This detects your OS and architecture, downloads the appropriate binary from the latest GitHub release, and installs it to `~/.local/bin/slurm-dash`.
 
 After install, make sure `~/.local/bin` is on your `PATH`:
 
@@ -26,40 +28,60 @@ After install, make sure `~/.local/bin` is on your `PATH`:
 export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc or ~/.zshrc
 ```
 
+Supported platforms:
+- Linux (x86_64, aarch64) — fully static musl binaries
+- macOS (x86_64, ARM64)
+- Windows (x86_64)
+
 ## Setup
 
-Add a remote cluster (runs over SSH/SCP — key-based auth recommended):
+Initialize a config template:
+
+```bash
+slurm-dash init-config
+```
+
+Edit `~/.config/slurm-dash/config.toml` and add your cluster(s):
+
+```toml
+[servers.mycluster]
+ssh_string = "user@hpc.cluster.edu"
+```
+
+Or use the one-shot add command:
 
 ```bash
 slurm-dash add user@hpc.cluster.edu --alias mycluster
 ```
 
-`--alias` is optional; it defaults to the hostname. This command:
-- Creates `~/.slurm_tracker/{bin,snapshots,staging}` on the remote
-- Deploys the `sbatch` wrapper and `capture.py`
-- Initialises the remote SQLite database
-- Appends `export PATH="$HOME/.slurm_tracker/bin:$PATH"` to `~/.bashrc` and `~/.zshrc`
-
-Source your rc file (or open a new shell) on the remote for the wrapper to take effect:
-
-```bash
-source ~/.bashrc
-```
+Either way, `slurm-dash` will auto-install the sbatch interceptor on first startup.
 
 ## Usage
 
+Start the daemon and open the web UI:
+
 ```bash
-slurm-dash          # launch the TUI (syncs all servers on startup)
-slurm-dash view     # same as above
-slurm-dash dump     # print raw DB rows to stdout
-slurm-dash dump --alias mycluster
-slurm-dash purge user@hpc.cluster.edu --older-than 14   # remove snapshots older than N days
+slurm-dash
+```
+
+(This spawns a background daemon on first run, then opens your browser to http://localhost:8765.)
+
+Other commands:
+
+```bash
+slurm-dash serve --port 9000     # foreground mode (e.g., for systemd)
+slurm-dash list                  # list configured clusters
+slurm-dash status                # check if daemon is running
+slurm-dash stop                  # stop the background daemon
+slurm-dash add <ssh> --alias <name>     # add a new cluster
+slurm-dash remove <alias> --yes  # remove a cluster
+slurm-dash remove <alias> --purge-local --yes  # also delete local job records
 ```
 
 ## Uninstallation
 
 ```bash
-slurm-dash remove user@hpc.cluster.edu
+slurm-dash stop                         # stop the daemon
+slurm-dash remove <alias> --yes         # remove a cluster
+rm ~/.local/bin/slurm-dash              # delete the binary
 ```
-
-Strips the PATH block from `~/.bashrc`/`~/.zshrc`, deletes `~/.slurm_tracker` on the remote, and removes the server from the local config. Add `--purge-local` to also drop all locally cached jobs and outputs for that server.
