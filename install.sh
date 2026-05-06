@@ -1,43 +1,15 @@
-#!/usr/bin/env bash
-set -eo pipefail
-
-# Install slurm-dash binary.
-# Usage: ./install.sh [nightly]
-# If run from inside the repo (has Cargo.toml nearby), build from source.
-# Otherwise download from GitHub releases (latest or nightly).
+#!/bin/bash
+set -e
 
 RELEASE_CHANNEL="${1:-latest}"
 BIN_DIR="$HOME/.local/bin"
 BIN_NAME="slurm-dash"
-
-mkdir -p "$BIN_DIR"
-
-# Try to find script directory for local builds (works when directly executed)
-SCRIPT_DIR=""
-if [[ -n "${0}" && "${0}" != "-bash" && "${0}" != "bash" ]]; then
-    SCRIPT_DIR="$(cd "$(dirname "${0}")/.." 2>/dev/null && pwd)" || SCRIPT_DIR=""
-fi
-
-# Check if we're in the repo directory
-if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/app/Cargo.toml" ]]; then
-    echo "Building slurm-dash from local source..."
-    cargo build --release --manifest-path "$SCRIPT_DIR/app/Cargo.toml"
-    cp "$SCRIPT_DIR/app/target/release/slurm-dash" "$BIN_DIR/slurm-dash"
-    echo "✓ slurm-dash installed from local build!"
-    echo ""
-    echo "To get started:"
-    echo "  slurm-dash init-config  # Create config template"
-    echo "  slurm-dash add user@cluster --alias mycluster"
-    echo "  slurm-dash             # Start the daemon and open the web UI"
-    exit 0
-fi
-
-# Download from GitHub releases
 REPO="haaaaron/slurm-dash"
 TEMP_DIR=$(mktemp -d)
 trap "rm -rf $TEMP_DIR" EXIT
 
-# Detect OS and architecture
+mkdir -p "$BIN_DIR"
+
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
@@ -46,7 +18,7 @@ case "$OS" in
         OS_NAME="linux"
         case "$ARCH" in
             x86_64) ARCH_NAME="x86_64" ;;
-            aarch64 | arm64) ARCH_NAME="aarch64" ;;
+            aarch64|arm64) ARCH_NAME="aarch64" ;;
             *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
         esac
         ;;
@@ -65,11 +37,8 @@ case "$OS" in
 esac
 
 ARTIFACT_NAME="slurm-dash-${OS_NAME}-${ARCH_NAME}"
-if [ "$OS_NAME" = "windows" ]; then
-    ARTIFACT_NAME="${ARTIFACT_NAME}.exe"
-fi
+[ "$OS_NAME" = "windows" ] && ARTIFACT_NAME="${ARTIFACT_NAME}.exe"
 
-# Get release download URL
 if [ "$RELEASE_CHANNEL" = "nightly" ]; then
     RELEASE_URL="https://api.github.com/repos/$REPO/releases/tags/nightly"
 else
@@ -88,14 +57,12 @@ curl -LsSf "$DOWNLOAD_URL" -o "$TEMP_DIR/$BIN_NAME"
 chmod +x "$TEMP_DIR/$BIN_NAME"
 mv "$TEMP_DIR/$BIN_NAME" "$BIN_DIR/$BIN_NAME"
 
-if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-    echo ""
-    echo "✓ slurm-dash installed to: $BIN_DIR/$BIN_NAME"
+echo "✓ slurm-dash installed successfully to $BIN_DIR/$BIN_NAME"
+
+if [ ":$PATH:" != *":$BIN_DIR:"* ]; then
     echo ""
     echo "To use it, add to your shell rc:"
     echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
-else
-    echo "✓ slurm-dash installed successfully!"
 fi
 
 echo ""
