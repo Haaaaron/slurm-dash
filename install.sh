@@ -5,7 +5,11 @@ set -euo pipefail
 # If run from inside the repo (has Cargo.toml nearby), build from source.
 # Otherwise download from GitHub releases.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+if [[ "$SCRIPT_DIR" == "" || "$SCRIPT_DIR" == "$BASH_SOURCE[0]" ]]; then
+    SCRIPT_DIR="."
+fi
+SCRIPT_DIR="$(cd "$SCRIPT_DIR" && pwd)"
 BIN_DIR="$HOME/.local/bin"
 BIN_NAME="slurm-dash"
 
