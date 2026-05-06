@@ -1,6 +1,6 @@
 //! Remote server setup: add, remove, and auto-install logic.
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use base64::Engine;
 use std::time::Duration;
 
