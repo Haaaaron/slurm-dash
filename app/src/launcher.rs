@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use std::io::Read;
+use std::net::TcpStream;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
@@ -20,16 +22,13 @@ pub async fn spawn_daemon(port: u16) -> Result<u32> {
 
 pub async fn wait_for_server(port: u16, timeout: Duration) -> Result<()> {
     let start = Instant::now();
-    let url = format!("http://localhost:{}", port);
+    let addr = format!("127.0.0.1:{}", port);
 
     loop {
-        if let Ok(resp) = reqwest::Client::new()
-            .get(&url)
-            .timeout(Duration::from_secs(2))
-            .send()
-            .await
-        {
-            if resp.status().is_success() || resp.status().is_redirection() {
+        if let Ok(mut stream) = TcpStream::connect(&addr) {
+            stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+            let mut buf = [0u8; 1];
+            if stream.read_exact(&mut buf).is_ok() || stream.read(&mut buf).is_ok() {
                 return Ok(());
             }
         }
